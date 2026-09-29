@@ -122,7 +122,7 @@ class ArscReader(bytes: ByteArray) {
             val (type, _, size) = r.header(off)
             if (size < 8 || off + size > r.size) break
             if (type == 0x0201) {
-                runCatching { readType(off, size) }?.let { chunks.add(it) }
+                runCatching { readType(off, size) }.getOrNull()?.let { chunks.add(it) }
             }
             off += size
         }
