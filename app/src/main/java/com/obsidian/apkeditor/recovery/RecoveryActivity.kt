@@ -5,27 +5,29 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
-import android.widget.Button
-import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.databinding.DataBindingUtil
 import com.obsidian.apkeditor.R
+import com.obsidian.apkeditor.databinding.ActivityRecoveryBinding
 import com.obsidian.apkeditor.ui.main.MainActivity
 
 /**
  * Isolated recovery surface.
  *
  * Safety contract (do not weaken):
- * - XML layout only, AppCompat widgets only.
+ * - XML layout + Data Binding only, AppCompat widgets only.
  * - References [CrashStore] and nothing else — never the container, tools,
  *   workspaces, or services. Safe to launch when everything else is broken.
  * - Every I/O call is guarded; this screen must never throw.
  */
 class RecoveryActivity : AppCompatActivity() {
 
+    private lateinit var binding: ActivityRecoveryBinding
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_recovery)
+        binding = DataBindingUtil.setContentView(this, R.layout.activity_recovery)
 
         val safeMode = intent.getBooleanExtra(EXTRA_SAFE_MODE, false) ||
             runCatching { CrashStore.inSafeMode(this) }.getOrDefault(false)
@@ -34,25 +36,24 @@ class RecoveryActivity : AppCompatActivity() {
         val report = pending?.text
             ?: runCatching { CrashStore.lastFatal(this) }.getOrDefault("")
 
-        findViewById<TextView>(R.id.recovery_status).text = when {
+        binding.recoveryStatus.text = when {
             safeMode -> getString(R.string.recovery_safe_mode)
             pending?.kind == CrashStore.KIND_ANR -> getString(R.string.recovery_anr)
             report.isNotEmpty() -> getString(R.string.recovery_crash)
             else -> getString(R.string.recovery_empty)
         }
-        findViewById<TextView>(R.id.recovery_log).text =
-            report.ifEmpty { getString(R.string.recovery_no_details) }
+        binding.recoveryLog.text = report.ifEmpty { getString(R.string.recovery_no_details) }
 
-        findViewById<Button>(R.id.btn_copy).setOnClickListener {
+        binding.btnCopy.setOnClickListener {
             copyReport(report)
         }
-        findViewById<Button>(R.id.btn_restart).setOnClickListener {
+        binding.btnRestart.setOnClickListener {
             val launch = Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             runCatching { startActivity(launch) }
             finish()
         }
-        findViewById<Button>(R.id.btn_close).setOnClickListener {
+        binding.btnClose.setOnClickListener {
             finishAndRemoveTask()
         }
     }
