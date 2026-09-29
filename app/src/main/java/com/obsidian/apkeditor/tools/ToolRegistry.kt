@@ -20,6 +20,12 @@ class ToolRegistry {
     private val _history = MutableStateFlow<List<ToolCall>>(emptyList())
     val history: StateFlow<List<ToolCall>> = _history.asStateFlow()
 
+    /** In-flight calls (name + start timestamp). Debug panel + stuck-call triage. */
+    data class ActiveCall(val seq: Long, val tool: String, val startedAt: Long)
+
+    private val _active = MutableStateFlow<List<ActiveCall>>(emptyList())
+    val active: StateFlow<List<ActiveCall>> = _active.asStateFlow()
+
     @Synchronized
     fun register(tool: ToolDefinition) {
         require(tool.name.matches(NAME_RE)) { "bad tool name: ${tool.name}" }
@@ -120,7 +126,13 @@ class ToolRegistry {
                 return ToolResult.Err(ToolErrorCode.BAD_ARGS, "${arg.name} is required")
             }
         }
-        return ToolExecutor.execute(tool, params, ::record)
+        val id = seq.incrementAndGet()
+        _active.update { it + ActiveCall(id, name, android.os.SystemClock.elapsedRealtime()) }
+        try {
+            return ToolExecutor.execute(tool, params) { t, ok, ms -> record(t, ok, ms) }
+        } finally {
+            _active.update { list -> list.filterNot { it.seq == id } }
+        }
     }
 
     private fun record(tool: String, ok: Boolean, ms: Long) {

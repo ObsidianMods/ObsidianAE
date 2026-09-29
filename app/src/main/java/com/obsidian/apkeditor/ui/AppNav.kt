@@ -8,9 +8,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -31,6 +34,7 @@ import com.obsidian.apkeditor.system.GrantRequests
 import com.obsidian.apkeditor.ui.components.BarIcon
 import com.obsidian.apkeditor.ui.components.CurveTab
 import com.obsidian.apkeditor.ui.components.CurvedBottomBar
+import com.obsidian.apkeditor.ui.components.DebugSheet
 import com.obsidian.apkeditor.ui.components.StorageGate
 import com.obsidian.apkeditor.ui.components.StorageSheet
 import com.obsidian.apkeditor.ui.screens.mcp.CapabilitiesScreen
@@ -66,6 +70,7 @@ fun AppNav() {
     // grant notification tap (background). Dismiss resolves the request.
     val app = LocalContext.current.applicationContext as ObsidianApp
     val pendingGrant by GrantRequests.pending.collectAsState()
+    var debugOpen by remember { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize().background(cs.background).systemBarsPadding()) {
         Column(Modifier.weight(1f).fillMaxWidth().nestedScroll(scrollBehavior.nestedScrollConnection)) {
@@ -80,7 +85,12 @@ fun AppNav() {
                     )
                 },
                 scrollBehavior = scrollBehavior,
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = cs.background),
+                actions = {
+                    IconButton(onClick = { debugOpen = true }) {
+                        Icon(Icons.Filled.BugReport, "Debug panel")
+                    }
+                }
             )
             // Accent edge under the bar — the accent stays visible everywhere.
             Box(Modifier.fillMaxWidth().height(2.dp).background(cs.primary.copy(alpha = 0.55f)))
@@ -101,5 +111,8 @@ fun AppNav() {
             pendingPath = pendingGrant?.takeIf { it.isNotEmpty() },
             onDismiss = { runCatching { app.container.service.onGrantResolved() } },
         )
+    }
+    if (debugOpen) {
+        DebugSheet(onDismiss = { debugOpen = false })
     }
 }
