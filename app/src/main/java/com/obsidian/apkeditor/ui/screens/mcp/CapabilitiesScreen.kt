@@ -10,9 +10,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -20,9 +23,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.tools.Capability
+import com.obsidian.apkeditor.tools.ToolHealth
+import com.obsidian.apkeditor.ui.components.HealthDot
+import com.obsidian.apkeditor.ui.components.ObActionButton
+import com.obsidian.apkeditor.ui.components.ObButtonKind
 import com.obsidian.apkeditor.ui.components.ObCard
 import com.obsidian.apkeditor.ui.components.ObSwitch
 import com.obsidian.apkeditor.ui.components.SectionLabel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class CapGroup(
     val id: Capability,
@@ -54,24 +64,49 @@ fun CapabilitiesScreen() {
     val app = LocalContext.current.applicationContext as ObsidianApp
     val registry = app.container.tools
     val prefs = app.container.prefs
+    val scope = rememberCoroutineScope()
     // Bumped on every toggle so sync prefs reads recompose.
     var nonce by remember { mutableIntStateOf(0) }
+    var verifying by remember { mutableStateOf(false) }
 
     fun refresh() {
         registry.syncDisabled(prefs.disabledTools(), prefs.disabledCapabilities())
         nonce++
     }
 
+    suspend fun verifyAll() {
+        verifying = true
+        withContext(Dispatchers.IO) { runCatching { registry.verifyAllSafe() } }
+        verifying = false
+        nonce++
+    }
+
+    // Safe dry-runs on open: badges reflect this session's live probes.
+    LaunchedEffect(Unit) { verifyAll() }
+
     // Prefs reads are synchronous; key them on nonce so toggles recompose.
     val disabledTools = remember(nonce) { prefs.disabledTools() }
     val disabledCaps = remember(nonce) { prefs.disabledCapabilities() }
     val tools = remember(nonce) { registry.all().sortedBy { it.name } }
+    val health = remember(nonce) {
+        tools.associate { it.name to registry.healthOf(it.name) }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { SectionLabel("Installed tools (${tools.size})") }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SectionLabel("Installed tools (${tools.size})", Modifier.weight(1f))
+                ObActionButton(
+                    if (verifying) "Verifying…" else "Verify",
+                    onClick = { scope.launch { verifyAll() } },
+                    enabled = !verifying,
+                    kind = ObButtonKind.Ghost,
+                )
+            }
+        }
         item {
             ObCard {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -92,6 +127,7 @@ fun CapabilitiesScreen() {
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    HealthDot(health[t.name] ?: ToolHealth.UNVERIFIED)
                                 }
                                 ObSwitch(
                                     checked = on,

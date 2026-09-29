@@ -40,6 +40,53 @@ class ToolRegistry {
     fun isEnabled(tool: ToolDefinition): Boolean =
         tool.name !in disabledTools && tool.capability.id !in disabledCaps
 
+    /** Live health overrides from probes (screen verify / startup smoke). */
+    private val healthOverrides = mutableMapOf<String, ToolHealth>()
+
+    @Synchronized
+    fun healthOf(name: String): ToolHealth =
+        healthOverrides[name] ?: tools[name]?.health ?: ToolHealth.UNVERIFIED
+
+    /** Audit mark: exercised live, known good (see ToolPacks). */
+    @Synchronized
+    fun markVerified(vararg names: String) {
+        for (n in names) healthOverrides[n] = ToolHealth.VERIFIED
+    }
+
+    /** Audit mark: safe to dry-run with [args] (read-only, no side effects). */
+    @Synchronized
+    fun markProbeSafe(name: String, args: Map<String, String> = emptyMap()) {
+        val cur = tools[name] ?: return
+        tools[name] = cur.copy(probeSafe = true, probeArgs = args)
+    }
+
+    /**
+     * Dry-runs one probe-safe tool (no history record, no gating bypass:
+     * disabled tools are skipped). Returns true on Ok. Callers use IO.
+     */
+    suspend fun probe(name: String): Boolean {
+        val def = synchronized(this) { tools[name] } ?: return false
+        if (!def.probeSafe || !isEnabled(def)) return false
+        val ok = try {
+            def.invoke(ToolContext(), def.probeArgs) is ToolResult.Ok
+        } catch (_: Exception) {
+            false
+        }
+        synchronized(this) {
+            healthOverrides[name] =
+                if (ok) ToolHealth.VERIFIED else ToolHealth.FAILED
+        }
+        return ok
+    }
+
+    /** Probes every safe+enabled tool. Returns name to pass/fail. Callers use IO. */
+    suspend fun verifyAllSafe(): Map<String, Boolean> {
+        val names = synchronized(this) {
+            tools.values.filter { it.probeSafe && isEnabled(it) }.map { it.name }
+        }
+        return names.associateWith { probe(it) }
+    }
+
     @Synchronized
     fun syncDisabled(tools: Set<String>, caps: Set<String>) {
         disabledTools.clear()

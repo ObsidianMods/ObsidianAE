@@ -39,6 +39,14 @@ enum class ToolErrorCode {
     INTERNAL,
 }
 
+/**
+ * Working-state indicator (UI badges + `ae_mcp_tool_health`).
+ * - VERIFIED: exercised live against the endpoint (see ToolPacks audit marks).
+ * - UNVERIFIED: ships, not yet exercised — unknown, not broken.
+ * - FAILED: a live probe just failed.
+ */
+enum class ToolHealth { VERIFIED, UNVERIFIED, FAILED }
+
 /** Flat string map envelope (20k/value truncation at the transport edge). */
 sealed interface ToolResult {
     data class Ok(val data: Map<String, String>, val page: Page? = null) : ToolResult
@@ -64,6 +72,11 @@ data class ToolDefinition(
     val args: List<ArgSpec>,
     val capability: Capability,
     val invoke: suspend ToolContext.(params: Map<String, String>) -> ToolResult,
+    /** Audit state. Overridden at runtime by live probes (see ToolRegistry). */
+    val health: ToolHealth = ToolHealth.UNVERIFIED,
+    /** True when the tool can be safely dry-run with [probeArgs] (read-only). */
+    val probeSafe: Boolean = false,
+    val probeArgs: Map<String, String> = emptyMap(),
 )
 
 data class ToolCall(

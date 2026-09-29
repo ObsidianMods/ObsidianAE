@@ -49,6 +49,14 @@ class MetaTools(
                 ok("server" to "obsidian-ae", "version" to "2.0",
                     "protocol" to "2025-03-26")
             }),
+        ToolDefinition("ae_mcp_tool_health", "Tool health",
+            "Working-state per tool: VERIFIED (exercised live), UNVERIFIED (ships, untested), FAILED (live probe just failed).",
+            emptyList(), Capability.APK, { _ ->
+                val rows = registry.all().sortedBy { it.name }.map { t ->
+                    "${t.name}|${registry.healthOf(t.name)}|${t.capability.id}"
+                }
+                ok("count" to rows.size.toString(), "health" to rows.joinToString(";"))
+            }),
     )
 
     private fun ToolContext.ok(vararg pairs: Pair<String, String>) =

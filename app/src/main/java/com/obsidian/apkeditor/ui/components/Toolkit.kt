@@ -88,6 +88,25 @@ fun StatusDot(running: Boolean, label: String, modifier: Modifier = Modifier) {
     }
 }
 
+/** Tool working-state badge: green verified, red failed, grey untested. */
+@Composable
+fun HealthDot(
+    health: com.obsidian.apkeditor.tools.ToolHealth,
+    modifier: Modifier = Modifier
+) {
+    val cs = MaterialTheme.colorScheme
+    val (color, label) = when (health) {
+        com.obsidian.apkeditor.tools.ToolHealth.VERIFIED -> cs.primary to "Verified"
+        com.obsidian.apkeditor.tools.ToolHealth.FAILED -> cs.error to "Failed"
+        else -> cs.outline to "Untested"
+    }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant)
+    }
+}
+
 /**
  * Endpoint row: bordered container, label + mono URL + status, copy chip
  * pinned right. Chip morphs to a check for 2s after copying.

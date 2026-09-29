@@ -58,5 +58,27 @@ object ToolPacks {
         MetaTools(registry, operations).registerAll(registry)
         // Gating synced from prefs at every warm (service start re-syncs too).
         registry.syncDisabled(prefs.disabledTools(), prefs.disabledCapabilities())
+        // Live-audit marks (loopback surface): VERIFIED = exercised and
+        // correct over the wire; probeSafe = zero-side-effect dry-run used
+        // by the Capabilities screen indicators + ae_mcp_tool_health.
+        registry.markVerified(
+            "ae_mcp_server_info",
+            "ae_mcp_list_capabilities",
+            "ae_ops_list",
+            "ae_file_access_policy",
+            "ae_apk_list_available_apks",
+            "ae_apk_list_workspaces",
+        )
+        for (n in listOf(
+            "ae_mcp_server_info",
+            "ae_mcp_list_capabilities",
+            "ae_mcp_tool_health",
+            "ae_ops_list",
+            "ae_file_access_policy",
+            "ae_apk_list_available_apks",
+            "ae_apk_list_workspaces",
+            "ae_file_list",
+        )) registry.markProbeSafe(n)
+        registry.markProbeSafe("ae_shell", mapOf("cmd" to "help"))
     }
 }
