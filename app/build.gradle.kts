@@ -99,6 +99,8 @@ dependencies {
 
     implementation(project(":apktools"))
 
+    implementation(libs.apksig.android)
+
     implementation(libs.smali.dexlib2)
     implementation(libs.smali.baksmali)
     implementation(libs.smali.smali)
