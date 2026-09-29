@@ -8,7 +8,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -71,15 +74,17 @@ fun <T> SlidingSegmented(
             label = "segX",
         )
         val animW by animateDpAsState(
-            targetValue = iw,
-            animationSpec = spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMediumLow),
+            // Width never goes bouncy: an overshoot below zero would hand a
+            // negative size to layout and crash measurement.
+            targetValue = iw.coerceAtLeast(0.dp),
+            animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow),
             label = "segW",
         )
         if (iw > 0.dp) {
             Box(
                 modifier = Modifier
                     .offset(x = animX)
-                    .size(width = animW, height = 42.dp)
+                    .size(width = animW.coerceAtLeast(0.dp), height = 42.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(
                         Brush.horizontalGradient(
@@ -124,6 +129,7 @@ fun <T> SlidingSegmented(
 }
 
 /** Accent orbit: dots with a spring ring that lands on the active hue. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AccentOrbit(
     options: List<Pair<Color, String>>,
@@ -131,10 +137,12 @@ fun AccentOrbit(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    androidx.compose.foundation.layout.Row(
-        modifier = modifier,
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    // FlowRow: wraps to a second line on narrow screens instead of
+    // overflowing or squeezing dots to zero width.
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         for ((color, name) in options) {
             val on = name == selected

@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -122,13 +123,18 @@ class ServiceController(
         val port = prefs.servicePort
         val path = prefs.endpointPath
         val server = McpServer(JsonRpcRouter(registry), scope.coroutineContext)
-        val ok = runCatching {
+        // Bind first, then verify the real agent path (not just the socket):
+        // a POST initialize + tools/list handshake like the reference build.
+        val startError: String? = try {
             server.start(port, path)
-            selfTest(port, path)
-        }.getOrDefault(false)
-        if (!ok) {
+            handshake(server.port, path)
+            null
+        } catch (t: Throwable) {
+            explainStart(t, port)
+        }
+        if (startError != null) {
             runCatching { server.destroy() }
-            _status.value = ServerStatus.Error("self-test failed on :$port/$path")
+            _status.value = ServerStatus.Error(startError)
             return
         }
         this.server = server
@@ -216,19 +222,72 @@ class ServiceController(
         refreshOverlay()
     }
 
-    private fun selfTest(port: Int, path: String): Boolean {
-        return try {
-            val url = java.net.URL("http://127.0.0.1:$port/$path")
-            (url.openConnection() as java.net.HttpURLConnection).run {
-                connectTimeout = 2000
-                readTimeout = 4000
-                requestMethod = "GET"
-                val code = responseCode
-                disconnect()
-                code == 200
+    /**
+     * Backup-grade self-test: a real MCP handshake over loopback (POST
+     * initialize + tools/list), retried briefly so a slow accept loop on
+     * low-end devices can't flunk a healthy bind. Throws with the cause.
+     */
+    private suspend fun handshake(port: Int, path: String) {
+        var last: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                probeOnce(port, path)
+                return
+            } catch (t: Throwable) {
+                last = t
+                if (attempt < 2) delay(250)
             }
-        } catch (_: Exception) {
-            false
+        }
+        throw last ?: IllegalStateException("handshake failed")
+    }
+
+    private fun probeOnce(port: Int, path: String) {
+        val init = postRpc(
+            port, path, 1, "initialize",
+            """"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"self-test","version":"1"}""",
+        )
+        check(init.contains("\"protocolVersion\"")) { "initialize returned: ${init.take(120)}" }
+        val list = postRpc(port, path, 2, "tools/list", "")
+        check(list.contains("\"tools\"")) { "tools/list returned: ${list.take(120)}" }
+    }
+
+    private fun postRpc(port: Int, path: String, id: Int, method: String, paramsJson: String): String {
+        val body = if (paramsJson.isEmpty()) {
+            """{"jsonrpc":"2.0","id":$id,"method":"$method"}"""
+        } else {
+            """{"jsonrpc":"2.0","id":$id,"method":"$method","params":{$paramsJson}}"""
+        }
+        java.net.Socket().use { s ->
+            s.connect(
+                java.net.InetSocketAddress(java.net.InetAddress.getByName("127.0.0.1"), port),
+                2000,
+            )
+            s.soTimeout = 4000
+            val b = body.toByteArray(Charsets.UTF_8)
+            val out = s.getOutputStream()
+            out.write(
+                ("POST /$path HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n" +
+                    "Content-Length: ${b.size}\r\nConnection: close\r\n\r\n")
+                    .toByteArray(Charsets.US_ASCII),
+            )
+            out.write(b)
+            out.flush()
+            val resp = s.getInputStream().readBytes().toString(Charsets.UTF_8)
+            // Server answers HTTP/1.0; accept either framing on the 200.
+            val statusLine = resp.lineSequence().firstOrNull().orEmpty()
+            check(statusLine.contains(" 200")) { "HTTP $statusLine" }
+            return resp.substringAfter("\r\n\r\n")
+        }
+    }
+
+    private fun explainStart(t: Throwable, port: Int): String {
+        val m = (t.message ?: t::class.java.simpleName).take(280)
+        return when {
+            m.contains("EPERM") ->
+                "Android blocked the network socket (EPERM). The INTERNET permission is missing or revoked."
+            t is java.net.BindException || m.contains("EADDRINUSE") ->
+                "Port $port is already in use by another app. Choose a different port in Settings → MCP config."
+            else -> "Start failed on :$port — $m"
         }
     }
 

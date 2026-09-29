@@ -273,6 +273,10 @@ private fun accentDot(a: Accent): Color = when (a) {
     Accent.TEAL -> Color(0xFF14B8A6)
     Accent.AMBER -> Color(0xFFF59E0B)
     Accent.CRIMSON -> Color(0xFFF43F5E)
+    Accent.BLUE -> Color(0xFF3B82F6)
+    Accent.GREEN -> Color(0xFF22C55E)
+    Accent.PINK -> Color(0xFFEC4899)
+    Accent.ORANGE -> Color(0xFFF97316)
 }
 
 /** Site-local IPv4 addresses for LAN URL construction (no loopback, no IPv6). */

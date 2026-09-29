@@ -38,6 +38,14 @@ private fun accentColors(accent: Accent, dark: Boolean): AccentSet = when (accen
     else AccentSet(Color(0xFFB26A00), Color.White, Color(0xFFFFE3B3))
     Accent.CRIMSON -> if (dark) AccentSet(Color(0xFFFF9AA6), Color(0xFF5B1220), Color(0xFF5A1624))
     else AccentSet(Color(0xFFC22744), Color.White, Color(0xFFFFD3DB))
+    Accent.BLUE -> if (dark) AccentSet(Color(0xFF93B8FF), Color(0xFF0A2358), Color(0xFF1D2F5C))
+    else AccentSet(Color(0xFF2B5FCE), Color.White, Color(0xFFD8E4FF))
+    Accent.GREEN -> if (dark) AccentSet(Color(0xFF86D99A), Color(0xFF0B3A20), Color(0xFF143A26))
+    else AccentSet(Color(0xFF1E7E3A), Color.White, Color(0xFFC9F0D2))
+    Accent.PINK -> if (dark) AccentSet(Color(0xFFF6A6D5), Color(0xFF57153B), Color(0xFF54203F))
+    else AccentSet(Color(0xFFC2277C), Color.White, Color(0xFFFFD6EA))
+    Accent.ORANGE -> if (dark) AccentSet(Color(0xFFFFB08A), Color(0xFF522100), Color(0xFF542E12))
+    else AccentSet(Color(0xFFC25200), Color.White, Color(0xFFFFDFC7))
 }
 
 private val ObsidianTypography = Typography(

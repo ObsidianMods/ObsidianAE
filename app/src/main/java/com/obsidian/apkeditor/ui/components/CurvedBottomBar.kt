@@ -2,7 +2,6 @@ package com.obsidian.apkeditor.ui.components
 
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -33,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -113,8 +112,11 @@ fun CurvedBottomBar(
         Row(Modifier.fillMaxSize()) {
             tabs.forEachIndexed { i, t ->
                 val sel = i == selIdx
-                val lift by animateDpAsState(
-                    if (sel) (-6).dp else 0.dp,
+                // Draw-phase lift: graphicsLayer never touches measurement,
+                // so a negative lift can never produce a negative layout size.
+                val liftPx = with(density) { (if (sel) -6.dp else 0.dp).toPx() }
+                val liftAnim by animateFloatAsState(
+                    liftPx,
                     animationSpec = spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessLow),
                     label = "tabLift"
                 )
@@ -126,7 +128,7 @@ fun CurvedBottomBar(
                             role = Role.Tab,
                             onClick = { onSelect(t.route) }
                         )
-                        .offset(y = lift),
+                        .graphicsLayer { translationY = liftAnim },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
