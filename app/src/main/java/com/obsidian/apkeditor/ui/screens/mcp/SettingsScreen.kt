@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -130,15 +131,21 @@ fun SettingsScreen() {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Scales the whole interface — watch it resize live.",
+                    "Scales the whole interface — release the slider to apply.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
+                // Drag position stays local: committing to prefs on every tick
+                // re-provides LocalDensity and remeasures the tree mid-gesture,
+                // which crashes measurement (Size out of range). Commit once
+                // on release — one clean remeasure, gesture already finished.
+                var sliderPos by remember(scale) { mutableFloatStateOf(scale) }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Slider(
-                        value = scale,
-                        onValueChange = { prefs.uiScale = it },
+                        value = sliderPos,
+                        onValueChange = { sliderPos = it },
+                        onValueChangeFinished = { prefs.uiScale = sliderPos },
                         valueRange = 0.85f..1.3f,
                         steps = 8,
                         modifier = Modifier.weight(1f),
@@ -149,7 +156,7 @@ fun SettingsScreen() {
                         )
                     )
                     Text(
-                        "${(scale * 100).roundToInt()}%",
+                        "${(sliderPos * 100).roundToInt()}%",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(start = 12.dp)

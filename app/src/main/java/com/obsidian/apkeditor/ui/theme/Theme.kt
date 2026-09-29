@@ -132,8 +132,14 @@ fun ObsidianAETheme(
     }
 
     // UI scale: scale dp density so S/M/L layouts actually resize.
+    // Hardened: a non-positive base density (broken device state) must never
+    // propagate — it would poison every dp→px conversion in the tree.
     val base = LocalDensity.current
-    val scaled = Density(density = base.density * uiScale.coerceIn(0.85f, 1.3f), fontScale = base.fontScale)
+    val safeBase = if (base.density > 0f) base.density else 1f
+    val scaled = Density(
+        density = safeBase * uiScale.coerceIn(0.85f, 1.3f),
+        fontScale = if (base.fontScale > 0f) base.fontScale else 1f,
+    )
 
     CompositionLocalProvider(LocalDensity provides scaled) {
         MaterialTheme(colorScheme = scheme, typography = ObsidianTypography, content = content)
