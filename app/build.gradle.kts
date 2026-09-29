@@ -81,7 +81,6 @@ android {
 
     buildFeatures {
         compose = true
-        dataBinding = true
     }
 
     packaging {

@@ -18,7 +18,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Single launcher activity. Crash handling lives exclusively in the
- * application class + the XML recovery screen — this activity references
+ * application class + the Compose recovery screen — this activity references
  * no recovery types, so a broken crash subsystem can never stall startup.
  */
 class MainActivity : AppCompatActivity() {
