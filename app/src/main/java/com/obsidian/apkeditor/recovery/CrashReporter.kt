@@ -25,6 +25,8 @@ object CrashReporter {
 
     private val installed = AtomicBoolean(false)
     private val watch = AnrWatch()
+    /** In-process relaunch breaker: a crashing recovery screen must not bounce. */
+    private val relaunches = AtomicInteger(0)
 
     fun install(ctx: Context) {
         if (!installed.compareAndSet(false, true)) return
@@ -47,18 +49,22 @@ object CrashReporter {
         } catch (_: Exception) {
             false
         }
-        try {
-            val intent = Intent(ctx, RecoveryActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-                .putExtra(RecoveryActivity.EXTRA_SAFE_MODE, safeMode)
-            ctx.startActivity(intent)
-            // Brief pause so ActivityManager can act before the process dies.
+        // Breaker: only the first crash in this process may relaunch the UI.
+        // A crashing RecoveryActivity would otherwise bounce forever (frozen app).
+        if (relaunches.getAndIncrement() == 0) {
             try {
-                Thread.sleep(350)
-            } catch (_: InterruptedException) {
+                val intent = Intent(ctx, RecoveryActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                    .putExtra(RecoveryActivity.EXTRA_SAFE_MODE, safeMode)
+                ctx.startActivity(intent)
+                // Brief pause so ActivityManager can act before the process dies.
+                try {
+                    Thread.sleep(350)
+                } catch (_: InterruptedException) {
+                }
+            } catch (_: Exception) {
+                // Background-start blocked or worse: fall through to previous handler.
             }
-        } catch (_: Exception) {
-            // Background-start blocked or worse: fall through to previous handler.
         }
         try {
             previous?.uncaughtException(thread, error)
