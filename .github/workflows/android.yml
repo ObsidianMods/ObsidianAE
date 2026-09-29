@@ -1,0 +1,67 @@
+name: android
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Fast parallel build on CI (phone stays low-memory via gradle.properties).
+    env:
+      GRADLE_OPTS: -Xmx4g -Dfile.encoding=UTF-8 -Dorg.gradle.parallel=true -Dorg.gradle.caching=true -Dorg.gradle.workers.max=4 -Dkotlin.daemon.jvmargs=-Xmx2g
+      GRADLE_USER_HOME: ${{ github.workspace }}/.gradle-home
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install Android platform matching compileSdk from catalog
+        run: |
+          COMPILE_SDK=$(grep -E '^compileSdk' gradle/libs.versions.toml | sed -E 's/.*"([0-9]+)".*/\1/')
+          echo "compileSdk from catalog: $COMPILE_SDK"
+          sdkmanager --install "cmdline-tools;latest" "platform-tools" 2>&1 | tail -n 5 || true
+          yes | sdkmanager --licenses || true
+          sdkmanager --install "platforms;android-$COMPILE_SDK" "build-tools;${COMPILE_SDK}.0.0" "platform-tools" 2>&1 | tail -n 20
+          sdkmanager --list_installed 2>&1 | grep -E "platforms;android|build-tools;" | head -n 20
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Setup Gradle (caches build state)
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build debug + release APKs
+        run: |
+          set -o pipefail
+          ./gradlew assembleDebug assembleRelease --parallel --max-workers=4 -Dorg.gradle.parallel=true -Dorg.gradle.caching=true 2>&1 | tee gradle-build.log
+          echo "--- APK outputs ---"
+          ls -lh app/build/outputs/apk/debug/ app/build/outputs/apk/release/ || true
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: obsidian-ae-apks
+          path: app/build/outputs/apk/**/*.apk
+
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: gradle-build.log
