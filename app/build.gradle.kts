@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
 }
 
 import java.util.Properties
@@ -79,6 +80,7 @@ android {
     }
 
     buildFeatures {
+        compose = true
         dataBinding = true
     }
 
@@ -96,6 +98,15 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.coroutines.android)
     implementation(libs.androidx.activity)
+    implementation(libs.androidx.activity.compose)
+
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.icons.core)
+    implementation(libs.androidx.compose.icons.extended)
 
     implementation(project(":apktools"))
 
