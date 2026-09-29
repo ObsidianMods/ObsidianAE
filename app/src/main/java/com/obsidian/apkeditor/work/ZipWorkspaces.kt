@@ -94,6 +94,26 @@ class ZipWorkspaces(app: Context) : WorkspaceRepository {
         target.writeBytes(data)
     }
 
+    override fun patchBytes(ws: Workspace, path: String, offset: Long, patch: ByteArray): Int {
+        checkName(path)
+        require(offset >= 0) { "negative offset" }
+        require(patch.size.toLong() <= WorkLimits.STAGE_BYTES) { "patch too large" }
+        val staged = File(ws.overlayDir(), safeRel(path))
+        val base: ByteArray = if (staged.isFile) {
+            check(staged.length() <= WorkLimits.ENTRY_BYTES) { "too large" }
+            staged.readBytes()
+        } else {
+            readBounded(ws, path, 0, WorkLimits.ENTRY_BYTES)
+        }
+        check(offset <= base.size) { "offset past end" }
+        check(offset + patch.size <= base.size) { "patch overruns end" }
+        val merged = base.copyOf()
+        patch.copyInto(merged, offset.toInt())
+        staged.parentFile?.mkdirs()
+        staged.writeBytes(merged)
+        return patch.size
+    }
+
     override fun stageDelete(ws: Workspace, path: String) {
         checkName(path)
         File(ws.overlayDir(), safeRel(path) + DELETED_SUFFIX).apply {

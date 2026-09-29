@@ -164,6 +164,23 @@ class FileTools(private val scope: FileScope = FileScope.default()) {
             }
             ok("deleted" to deleted.toString())
         },
+        def("ae_file_patch_bytes", "Patch bytes", "In-place hex patch of a scoped file.",
+            listOf(ArgSpec("path", true), ArgSpec("offset", true), ArgSpec("hex", true)),
+            Capability.FILE_WRITE) { p ->
+            val n = withContext(Dispatchers.IO) {
+                val f = scope.resolve(p.need("path"))
+                check(f.isFile && f.length() <= MAX_READ) { "too large or missing" }
+                val offset = p.opt("offset", "0").toLongOrNull()?.coerceAtLeast(0) ?: 0
+                val patch = p.need("hex").hexToBytes()
+                java.io.RandomAccessFile(f, "rw").use { raf ->
+                    check(offset + patch.size <= raf.length()) { "patch overruns end" }
+                    raf.seek(offset)
+                    raf.write(patch)
+                }
+                patch.size
+            }
+            ok("path" to p.need("path"), "patched" to n.toString())
+        },
     )
 
     private fun def(

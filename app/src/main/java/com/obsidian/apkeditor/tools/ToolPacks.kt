@@ -4,9 +4,12 @@ import com.obsidian.apkeditor.mcp.ServiceController
 import com.obsidian.apkeditor.ops.OperationTracker
 import com.obsidian.apkeditor.system.Prefs
 import com.obsidian.apkeditor.tools.packs.ApkTools
+import com.obsidian.apkeditor.tools.packs.DexTools
 import com.obsidian.apkeditor.tools.packs.EditTools
 import com.obsidian.apkeditor.tools.packs.FileTools
 import com.obsidian.apkeditor.tools.packs.MetaTools
+import com.obsidian.apkeditor.tools.packs.ResTools
+import com.obsidian.apkeditor.tools.packs.SmaliTools
 import com.obsidian.apkeditor.work.WorkspaceRepository
 
 /**
@@ -26,6 +29,9 @@ object ToolPacks {
         FileTools().registerAll(registry)
         // APK + edit packs need the workspace store.
         ApkTools(service.appContext, workspaces).registerAll(registry)
+        DexTools(workspaces).registerAll(registry)
+        SmaliTools().registerAll(registry)
+        ResTools(workspaces).registerAll(registry)
         EditTools(workspaces, operations).registerAll(registry)
         MetaTools(registry, operations).registerAll(registry)
         // Gating synced from prefs at every warm (service start re-syncs too).

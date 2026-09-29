@@ -37,6 +37,7 @@ interface WorkspaceRepository {
     fun readTextPreview(ws: Workspace, path: String, maxChars: Int): String
     fun readBytes(ws: Workspace, path: String, offset: Long, maxBytes: Int): ByteArray
     fun stageBytes(ws: Workspace, path: String, data: ByteArray)
+    fun patchBytes(ws: Workspace, path: String, offset: Long, patch: ByteArray): Int
     fun stageDelete(ws: Workspace, path: String)
     fun stagedPaths(ws: Workspace): List<String>
     fun rebuild(ws: Workspace, outName: String): File

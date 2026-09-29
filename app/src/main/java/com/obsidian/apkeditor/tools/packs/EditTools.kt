@@ -85,6 +85,17 @@ class EditTools(
                 throw e
             }
         },
+        def("ae_apk_patch_bytes", "Patch bytes", "In-place hex patch of a staged entry.",
+            listOf(ArgSpec("sessionId", true), ArgSpec("path", true),
+                ArgSpec("offset", true), ArgSpec("hex", true)), Capability.EDIT) { p ->
+            val ws = sessionWs(p.need("sessionId"))
+            val offset = p.opt("offset", "0").toLongOrNull()?.coerceAtLeast(0) ?: 0
+            val patch = p.need("hex").hexToBytes()
+            val n = withContext(Dispatchers.IO) {
+                workspaces.patchBytes(ws, p.need("path"), offset, patch)
+            }
+            ok("path" to p.need("path"), "offset" to offset.toString(), "patched" to n.toString())
+        },
         def("ae_apk_read_signature", "Read signature", "Honest v1 presence scan; verified=false.",
             listOf(ArgSpec("workspaceId", true)), Capability.APK) { p ->
             val ws = workspaces.open(p.need("workspaceId"))
@@ -102,6 +113,14 @@ class EditTools(
     private fun sessionWs(session: String) =
         sessions[session]?.let { workspaces.open(it) }
             ?: throw NoSuchElementException("unknown session")
+
+    private fun String.hexToBytes(): ByteArray {
+        val clean = filter { it.isLetterOrDigit() }
+        require(clean.length % 2 == 0) { "odd hex length" }
+        return ByteArray(clean.length / 2) { i ->
+            clean.substring(i * 2, i * 2 + 2).toInt(16).toByte()
+        }
+    }
 
     private fun def(
         name: String, title: String, desc: String, args: List<ArgSpec>,
