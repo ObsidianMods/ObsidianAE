@@ -20,19 +20,21 @@ object ToolPacks {
 
     fun registerAll(
         registry: ToolRegistry,
+        appContext: android.content.Context,
         workspaces: WorkspaceRepository,
         operations: OperationTracker,
         prefs: Prefs,
         service: ServiceController,
+        sessions: SessionStore,
     ) {
         // File tools need no context.
         FileTools().registerAll(registry)
-        // APK + edit packs need the workspace store.
+        // APK + dex + edit packs need the workspace store.
         ApkTools(service.appContext, workspaces).registerAll(registry)
         DexTools(workspaces).registerAll(registry)
-        SmaliTools().registerAll(registry)
+        SmaliTools(appContext, workspaces, sessions).registerAll(registry)
         ResTools(workspaces).registerAll(registry)
-        EditTools(workspaces, operations).registerAll(registry)
+        EditTools(workspaces, operations, sessions).registerAll(registry)
         MetaTools(registry, operations).registerAll(registry)
         // Gating synced from prefs at every warm (service start re-syncs too).
         registry.syncDisabled(prefs.disabledTools(), prefs.disabledCapabilities())

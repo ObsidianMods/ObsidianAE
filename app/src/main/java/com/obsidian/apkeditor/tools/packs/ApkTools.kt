@@ -133,14 +133,29 @@ class ApkTools(
             }
             ok("path" to p.need("path"), "size" to bytes.size.toString(), "hex" to bytes.toHex())
         },
-        def("ae_apk_info", "APK info", "Structural flags + install metadata.",
+        def("ae_apk_info", "APK info", "Full metadata via the ported inspector.",
             listOf(ArgSpec("workspaceId", true), ArgSpec("full", false)), Capability.APK) { p ->
             val ws = wsOf(p.need("workspaceId"))
             val meta = withContext(Dispatchers.IO) { inspector.inspect(ws) }
-            ok("package" to meta.packageName, "versionName" to meta.versionName,
+            val full = withContext(Dispatchers.IO) {
+                runCatching { apktools.ApkTools.inspectApk(ws.original()) }.getOrNull()
+            }
+            val base = mutableMapOf(
+                "package" to meta.packageName, "versionName" to meta.versionName,
                 "versionCode" to meta.versionCode.toString(), "apkSize" to meta.apkSize.toString(),
                 "entries" to meta.entryCount.toString(), "hasDex" to meta.hasDex.toString(),
                 "hasArsc" to meta.hasArsc.toString(), "hasNativeLibs" to meta.hasNativeLibs.toString())
+            if (full != null) {
+                base["minSdk"] = full.minSdk().toString()
+                base["targetSdk"] = full.targetSdk().toString()
+                base["permissions"] = full.permissions().take(40).joinToString(";")
+                base["features"] = full.features().take(20).joinToString(";") { it.name.orEmpty() }
+                if (p.opt("full") == "true") {
+                    base["manifest"] = runCatching { full.manifestStringResolved() }
+                        .getOrDefault("").take(WorkLimits.VALUE_CHARS)
+                }
+            }
+            okPairs(base)
         },
         def("ae_apk_close", "Close workspace", "Optionally delete its directory.",
             listOf(ArgSpec("workspaceId", true), ArgSpec("delete", false)), Capability.APK) { p ->
@@ -161,6 +176,9 @@ class ApkTools(
     private fun ToolContext.ok(vararg pairs: Pair<String, String>,
         page: com.obsidian.apkeditor.tools.Page? = null) =
         ToolResult.Ok(pairs.associate { it.first to it.second.capped() }, page)
+
+    private fun ToolContext.okPairs(map: Map<String, String>) =
+        ToolResult.Ok(map.mapValues { it.value.capped() })
 }
 
 private fun ByteArray.toHex(): String {

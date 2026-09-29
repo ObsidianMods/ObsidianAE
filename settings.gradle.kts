@@ -17,8 +17,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // apksig-android (MuntashirAkon fork) publishes via JitPack only.
+        maven { url = uri("https://jitpack.io") }
     }
 }
 
 rootProject.name = "Obsidian AE"
 include(":app")
+include(":apktools")

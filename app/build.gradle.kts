@@ -96,4 +96,11 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.coroutines.android)
     implementation(libs.androidx.activity)
+
+    implementation(project(":apktools"))
+
+    implementation(libs.smali.dexlib2)
+    implementation(libs.smali.baksmali)
+    implementation(libs.smali.smali)
+    implementation(libs.smali.util)
 }

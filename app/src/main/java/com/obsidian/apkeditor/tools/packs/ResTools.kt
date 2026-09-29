@@ -1,5 +1,6 @@
 package com.obsidian.apkeditor.tools.packs
 
+import apktools.ApkTools
 import com.obsidian.apkeditor.tools.ArgSpec
 import com.obsidian.apkeditor.tools.Capability
 import com.obsidian.apkeditor.tools.ToolContext
@@ -11,15 +12,13 @@ import com.obsidian.apkeditor.tools.need
 import com.obsidian.apkeditor.tools.opt
 import com.obsidian.apkeditor.work.WorkLimits
 import com.obsidian.apkeditor.work.WorkspaceRepository
-import com.obsidian.apkeditor.work.arsc.ArscReader
-import com.obsidian.apkeditor.work.arsc.AxmlDecoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Resource tools over the clean-room binary engines. Plain-XML entries read
- * directly; binary AXML decodes; ARSC inspects and resolves by ID.
- * Entry bytes are capped before decode (never whole-file materialization).
+ * Resource tools over the ported apktools engines (owner AXML decoder with
+ * id resolution, ARSC table with unknown-chunk-preserving model).
+ * Entry bytes are capped before decode.
  */
 class ResTools(private val workspaces: WorkspaceRepository) {
 
@@ -29,7 +28,7 @@ class ResTools(private val workspaces: WorkspaceRepository) {
 
     private fun all(): List<ToolDefinition> = listOf(
         ToolDefinition("ae_xml_decode", "Decode XML",
-            "Plain XML text, or decoded binary AXML.",
+            "Resolved XML text (binary AXML decoded with id resolution).",
             listOf(ArgSpec("workspaceId", true), ArgSpec("path", true),
                 ArgSpec("maxChars", false)), Capability.RES, { p ->
                 val ws = workspaces.open(p.need("workspaceId"))
@@ -43,20 +42,21 @@ class ResTools(private val workspaces: WorkspaceRepository) {
                 ok("path" to p.need("path"), "xml" to xml)
             }),
         ToolDefinition("ae_apk_resource_read", "Read resource",
-            "Entry XML by path, or ARSC value by resId (0x…).",
+            "Entry XML by path, or ARSC key/value by resId (0x…).",
             listOf(ArgSpec("workspaceId", true), ArgSpec("path", false),
                 ArgSpec("resId", false), ArgSpec("maxChars", false)), Capability.RES, { p ->
                 val ws = workspaces.open(p.need("workspaceId"))
                     ?: throw NoSuchElementException("unknown workspace")
                 val resId = p.opt("resId")
                 if (resId.isNotEmpty()) {
-                    val id = resId.removePrefix("0x").toUIntOrNull(16)?.toInt()
-                        ?: throw IllegalArgumentException("bad resId")
-                    val entry = withContext(Dispatchers.IO) {
-                        ArscReader(arscBytes(ws.id)).resolve(id)
+                    val id = parseResId(resId)
+                    val (key, value, complex) = withContext(Dispatchers.IO) {
+                        val arsc = ApkTools.openArsc(arscBytes(ws.id))
+                        val e = arsc.resolve(id)
+                        Triple(e.key(), e.stringValue(), e.isComplex)
                     }
-                    ok("resId" to resId, "key" to entry.key,
-                        "value" to entry.value, "complex" to entry.complex.toString())
+                    ok("resId" to resId, "key" to key,
+                        "value" to value, "complex" to complex.toString())
                 } else {
                     val max = p.boundedInt("maxChars", 8000, 1, 20_000)
                     val path = p.opt("path", "AndroidManifest.xml").takeIf { it.isNotEmpty() }
@@ -73,25 +73,31 @@ class ResTools(private val workspaces: WorkspaceRepository) {
             "Package/type/entry counts plus locales.",
             listOf(ArgSpec("workspaceId", true)), Capability.RES, { p ->
                 val inv = withContext(Dispatchers.IO) {
-                    ArscReader(arscBytes(p.need("workspaceId"))).inventory()
+                    val arsc = ApkTools.openArsc(arscBytes(p.need("workspaceId")))
+                    val types = arsc.packages().flatMap { pkg ->
+                        pkg.allTypes().map { t -> t.id() }
+                            .distinct()
+                            .map { tid -> "%02x/%s".format(pkg.id(), pkg.typeName(tid)) }
+                    }
+                    Inv(arsc.packages().size, arsc.totalEntries(),
+                        arsc.locales().toList(), types)
                 }
                 ok("packages" to inv.packages.toString(), "entries" to inv.entries.toString(),
                     "locales" to inv.locales.joinToString(","),
-                    "size" to inv.size.toString(),
                     "types" to inv.types.take(100).joinToString(";"))
             }),
         ToolDefinition("ae_arsc_resolve", "Resolve resource",
             "ARSC key/value for a resource ID.",
             listOf(ArgSpec("workspaceId", true), ArgSpec("resId", true)),
             Capability.RES, { p ->
-                val id = p.need("resId").removePrefix("0x").removePrefix("0X")
-                    .toUIntOrNull(16)?.toInt()
-                    ?: throw IllegalArgumentException("bad resId")
-                val entry = withContext(Dispatchers.IO) {
-                    ArscReader(arscBytes(p.need("workspaceId"))).resolve(id)
+                val id = parseResId(p.need("resId"))
+                val (key, value, complex) = withContext(Dispatchers.IO) {
+                    val arsc = ApkTools.openArsc(arscBytes(p.need("workspaceId")))
+                    val e = arsc.resolve(id)
+                    Triple(e.key(), e.stringValue(), e.isComplex)
                 }
-                ok("resId" to p.need("resId"), "key" to entry.key,
-                    "value" to entry.value, "complex" to entry.complex.toString())
+                ok("resId" to p.need("resId"), "key" to key,
+                    "value" to value, "complex" to complex.toString())
             }),
         ToolDefinition("ae_apk_resource_xref", "Resource xrefs",
             "Lines of the decoded manifest matching a query.",
@@ -115,13 +121,23 @@ class ResTools(private val workspaces: WorkspaceRepository) {
             }),
     )
 
+    private data class Inv(
+        val packages: Int,
+        val entries: Int,
+        val locales: List<String>,
+        val types: List<String>,
+    )
+
     private fun decodeXml(bytes: ByteArray, max: Int): String {
         if (bytes.size >= 8 && bytes[0] == 0x03.toByte() && bytes[1] == 0x00.toByte()) {
-            return runCatching { AxmlDecoder.decode(bytes, max) }.getOrNull()
-                ?: throw IllegalStateException("cannot decode binary XML")
+            return ApkTools.xmlToString(bytes).take(max)
         }
         return bytes.toString(Charsets.UTF_8).take(max)
     }
+
+    private fun parseResId(raw: String): Int =
+        raw.removePrefix("0x").removePrefix("0X").toUIntOrNull(16)?.toInt()
+            ?: throw IllegalArgumentException("bad resId")
 
     private fun arscBytes(workspaceId: String): ByteArray {
         val ws = workspaces.open(workspaceId) ?: throw NoSuchElementException("unknown workspace")

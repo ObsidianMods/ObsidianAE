@@ -4,6 +4,7 @@ import com.obsidian.apkeditor.ops.OpStatus
 import com.obsidian.apkeditor.ops.OperationTracker
 import com.obsidian.apkeditor.tools.ArgSpec
 import com.obsidian.apkeditor.tools.Capability
+import com.obsidian.apkeditor.tools.SessionStore
 import com.obsidian.apkeditor.tools.ToolContext
 import com.obsidian.apkeditor.tools.ToolDefinition
 import com.obsidian.apkeditor.tools.ToolRegistry
@@ -14,19 +15,16 @@ import com.obsidian.apkeditor.work.WorkLimits
 import com.obsidian.apkeditor.work.WorkspaceRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Edit staging + build. Sessions are short-lived UUIDs bound to workspaces;
- * unlike the reference (unbounded 8-hex map, never cleared), sessions are
- * removed on build/close and validated on every call.
+ * Edit staging + build + sign. Sessions live in the shared [SessionStore]
+ * (capped, explicitly closed) instead of a pack-local unbounded map.
  */
 class EditTools(
     private val workspaces: WorkspaceRepository,
     private val operations: OperationTracker,
+    private val sessions: SessionStore,
 ) {
-    private val sessions = ConcurrentHashMap<String, String>()
 
     fun registerAll(r: ToolRegistry) {
         for (t in all()) r.register(t)
@@ -37,9 +35,7 @@ class EditTools(
             listOf(ArgSpec("workspaceId", true)), Capability.EDIT) { p ->
             val ws = workspaces.open(p.need("workspaceId"))
                 ?: throw NoSuchElementException("unknown workspace")
-            val session = UUID.randomUUID().toString().take(8)
-            if (sessions.size > 64) sessions.clear()
-            sessions[session] = ws.id
+            val session = sessions.open(ws.id)
             ok("sessionId" to session, "workspaceId" to ws.id)
         },
         def("ae_apk_edit_text", "Stage text", "Stage a UTF-8 entry replacement.",
@@ -65,6 +61,28 @@ class EditTools(
             val staged = withContext(Dispatchers.IO) { workspaces.stagedPaths(ws) }
             ok("staged" to staged.size.toString(), "files" to staged.joinToString(";"))
         },
+        def("ae_apk_edit_resource", "Edit resource", "Set an ARSC string value, stage rebuilt table.",
+            listOf(ArgSpec("sessionId", true), ArgSpec("resId", true), ArgSpec("value", true)),
+            Capability.EDIT) { p ->
+            val ws = sessionWs(p.need("sessionId"))
+            val id = p.need("resId").removePrefix("0x").removePrefix("0X")
+                .toUIntOrNull(16)?.toInt() ?: throw IllegalArgumentException("bad resId")
+            val key = withContext(Dispatchers.IO) {
+                val current = workspaces.readBytes(ws, "resources.arsc", 0,
+                    WorkLimits.ENTRY_BYTES.toInt())
+                val table = apktools.ApkTools.openArsc(current)
+                val entry = try {
+                    table.resolve(id)
+                } catch (e: Exception) {
+                    throw NoSuchElementException("no such resource")
+                }
+                entry.setString(p.need("value"))
+                val rebuilt = apktools.ApkTools.rebuildArsc(table)
+                workspaces.stageBytes(ws, "resources.arsc", rebuilt)
+                entry.key()
+            }
+            ok("resId" to p.need("resId"), "key" to key, "staged" to "true")
+        },
         def("ae_apk_build", "Build APK", "Rebuild + align into output/. Poll ae_ops_get.",
             listOf(ArgSpec("sessionId", true), ArgSpec("outName", false)), Capability.EDIT) { p ->
             val ws = sessionWs(p.need("sessionId"))
@@ -73,7 +91,7 @@ class EditTools(
             try {
                 operations.update(op.id) { it.copy(status = OpStatus.RUNNING) }
                 val out = withContext(Dispatchers.IO) { workspaces.rebuild(ws, outName) }
-                sessions.remove(p.need("sessionId"))
+                sessions.close(p.need("sessionId"))
                 operations.update(op.id) {
                     it.copy(status = OpStatus.SUCCEEDED, progress = 1f, resultPath = out.path)
                 }
@@ -96,23 +114,94 @@ class EditTools(
             }
             ok("path" to p.need("path"), "offset" to offset.toString(), "patched" to n.toString())
         },
-        def("ae_apk_read_signature", "Read signature", "Honest v1 presence scan; verified=false.",
+        def("ae_apk_read_signature", "Read signature", "v1 presence + real verification.",
             listOf(ArgSpec("workspaceId", true)), Capability.APK) { p ->
             val ws = workspaces.open(p.need("workspaceId"))
                 ?: throw NoSuchElementException("unknown workspace")
-            val hasV1 = withContext(Dispatchers.IO) {
-                workspaces.listEntries(ws, "META-INF/", 0, 100).entries.any {
-                    it.path.endsWith(".SF") || it.path.endsWith(".RSA")
-                }
+            val (hasV1, verified) = withContext(Dispatchers.IO) {
+                val v = com.obsidian.apkeditor.work.SigningBridge.verify(ws.original())
+                com.obsidian.apkeditor.work.SigningBridge.hasV1(ws.original()) to v.verified
             }
-            ok("hasV1" to hasV1.toString(), "verified" to "false",
-                "note" to "debug backend: presence only")
+            ok("hasV1" to hasV1.toString(), "verified" to verified.toString())
+        },
+        def("ae_apk_sign", "Sign APK", "V1+V2 sign a built output with the dev key.",
+            listOf(ArgSpec("workspaceId", true), ArgSpec("input", false), ArgSpec("output", false)),
+            Capability.EDIT) { p ->
+            val ws = workspaces.open(p.need("workspaceId"))
+                ?: throw NoSuchElementException("unknown workspace")
+            val inputName = p.opt("input", "rebuilt.apk").takeIf { it.isNotEmpty() } ?: "rebuilt.apk"
+            val outputName = p.opt("output", "signed.apk").takeIf { it.isNotEmpty() } ?: "signed.apk"
+            val out = withContext(Dispatchers.IO) {
+                val dir = ws.outputDir()
+                val input = guardedOutput(dir, inputName)
+                check(input.isFile) { "missing built file: $inputName (run ae_apk_build first)" }
+                val output = guardedOutput(dir, outputName)
+                val key = loadDevKey()
+                com.obsidian.apkeditor.work.SigningBridge.sign(
+                    input, output, key.storeFile, key.storePassword, key.alias, key.keyPassword)
+                output
+            }
+            ok("input" to inputName, "output" to outputName, "size" to out.length().toString())
+        },
+        def("ae_apk_verify", "Verify APK", "Full v1/v2/v3 verification of a built file.",
+            listOf(ArgSpec("workspaceId", true), ArgSpec("file", false)), Capability.APK) { p ->
+            val ws = workspaces.open(p.need("workspaceId"))
+                ?: throw NoSuchElementException("unknown workspace")
+            val name = p.opt("file", "signed.apk").takeIf { it.isNotEmpty() } ?: "signed.apk"
+            val v = withContext(Dispatchers.IO) {
+                com.obsidian.apkeditor.work.SigningBridge.verify(guardedOutput(ws.outputDir(), name))
+            }
+            ok("file" to name, "verified" to v.verified.toString(),
+                "v1" to v.v1.toString(), "v2" to v.v2.toString(),
+                "errors" to v.errors.take(5).joinToString(";"),
+                "signers" to v.signers.joinToString(";"))
         },
     )
 
     private fun sessionWs(session: String) =
-        sessions[session]?.let { workspaces.open(it) }
+        sessions.resolve(session)?.let { workspaces.open(it) }
             ?: throw NoSuchElementException("unknown session")
+
+    /** Output names are bare file names — never paths. */
+    private fun guardedOutput(dir: java.io.File, name: String): java.io.File {
+        require(name.isNotEmpty() && '/' !in name && '\\' !in name) { "bad file name" }
+        require(name != "." && name != ".." && !name.startsWith(".")) { "bad file name" }
+        return java.io.File(dir, name)
+    }
+
+    private data class DevKey(
+        val storeFile: java.io.File,
+        val storePassword: String,
+        val alias: String,
+        val keyPassword: String,
+    )
+
+    /**
+     * Dev signing key, staged by the agent in the MCP folder
+     * (`key.properties` + the keystore it points at). Nothing secret ships
+     * inside the APK; absence reports UNSUPPORTED with placement guidance.
+     */
+    private fun loadDevKey(): DevKey {
+        val root = com.obsidian.apkeditor.system.FileScope.default().rootDir()
+        val propsFile = java.io.File(root, "key.properties")
+        if (!propsFile.isFile) {
+            throw UnsupportedOperationException(
+                "dev key not staged: place release.jks + key.properties in the MCP folder")
+        }
+        val props = java.util.Properties()
+        propsFile.inputStream().use { props.load(it) }
+        val store = java.io.File(root,
+            props.getProperty("storeFile")?.takeIf { it.isNotEmpty() } ?: "release.jks")
+        if (!store.isFile) {
+            throw UnsupportedOperationException("keystore missing next to key.properties")
+        }
+        return DevKey(
+            storeFile = store,
+            storePassword = props.getProperty("storePassword").orEmpty(),
+            alias = props.getProperty("keyAlias")?.takeIf { it.isNotEmpty() } ?: "obsidian",
+            keyPassword = props.getProperty("keyPassword").orEmpty(),
+        )
+    }
 
     private fun String.hexToBytes(): ByteArray {
         val clean = filter { it.isLetterOrDigit() }
