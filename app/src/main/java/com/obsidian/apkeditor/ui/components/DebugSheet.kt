@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.obsidian.apkeditor.app.ObsidianApp
+import com.obsidian.apkeditor.ui.theme.Mono
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
