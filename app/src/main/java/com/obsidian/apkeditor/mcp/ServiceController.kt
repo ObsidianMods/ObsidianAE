@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 sealed interface ServerStatus {
     data object Stopped : ServerStatus
@@ -71,34 +72,43 @@ class ServiceController(
     }
 
     suspend fun start() {
-        lock.withLock {
-            _status.value = ServerStatus.Starting
-            stopServerLocked()
-            val registry = runCatching { registryProvider?.invoke() }.getOrNull()
-            if (registry == null) {
-                _status.value = ServerStatus.Error("tools not ready")
-                return
+        // Network + socket work must never run on the caller's dispatcher:
+        // UI entry points call this from Main, where blocking I/O throws
+        // NetworkOnMainThreadException and the start always "fails".
+        withContext(Dispatchers.IO) {
+            lock.withLock {
+                startLocked()
             }
-            registry.syncDisabled(prefs.disabledTools(), prefs.disabledCapabilities())
-            val port = prefs.servicePort
-            val path = prefs.endpointPath
-            val server = McpServer(JsonRpcRouter(registry), scope.coroutineContext)
-            val ok = runCatching {
-                server.start(port, path)
-                selfTest(port, path)
-            }.getOrDefault(false)
-            if (!ok) {
-                runCatching { server.destroy() }
-                _status.value = ServerStatus.Error("self-test failed on :$port/$path")
-                return
-            }
-            this.server = server
-            prefs.serviceWanted = true
-            _status.value = ServerStatus.Running(
-                server.port, endpointUrl(server.port, path), System.currentTimeMillis())
-            McpService.start(appContext)
-            McpNotifications.show(appContext, endpointUrl(server.port, path))
         }
+    }
+
+    private suspend fun startLocked() {
+        _status.value = ServerStatus.Starting
+        stopServerLocked()
+        val registry = runCatching { registryProvider?.invoke() }.getOrNull()
+        if (registry == null) {
+            _status.value = ServerStatus.Error("tools not ready")
+            return
+        }
+        registry.syncDisabled(prefs.disabledTools(), prefs.disabledCapabilities())
+        val port = prefs.servicePort
+        val path = prefs.endpointPath
+        val server = McpServer(JsonRpcRouter(registry), scope.coroutineContext)
+        val ok = runCatching {
+            server.start(port, path)
+            selfTest(port, path)
+        }.getOrDefault(false)
+        if (!ok) {
+            runCatching { server.destroy() }
+            _status.value = ServerStatus.Error("self-test failed on :$port/$path")
+            return
+        }
+        this.server = server
+        prefs.serviceWanted = true
+        _status.value = ServerStatus.Running(
+            server.port, endpointUrl(server.port, path), System.currentTimeMillis())
+        McpService.start(appContext)
+        McpNotifications.show(appContext, endpointUrl(server.port, path))
     }
 
     suspend fun stop() {

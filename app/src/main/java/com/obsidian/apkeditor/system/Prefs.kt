@@ -29,6 +29,18 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(KEY_STOP_REMOVED, true)
         set(value) = sp.edit { putBoolean(KEY_STOP_REMOVED, value) }
 
+    var themeMode: String
+        get() = sp.getString(KEY_THEME, "SYSTEM").orEmpty().takeIf { it.isNotEmpty() } ?: "SYSTEM"
+        set(value) = sp.edit { putString(KEY_THEME, value) }
+
+    var accent: String
+        get() = sp.getString(KEY_ACCENT, "VIOLET").orEmpty().takeIf { it.isNotEmpty() } ?: "VIOLET"
+        set(value) = sp.edit { putString(KEY_ACCENT, value) }
+
+    var uiScale: Float
+        get() = sp.getFloat(KEY_SCALE, 1f).coerceIn(0.85f, 1.3f)
+        set(value) = sp.edit { putFloat(KEY_SCALE, value.coerceIn(0.85f, 1.3f)) }
+
     fun disabledTools(): Set<String> =
         sp.getStringSet(KEY_DISABLED_TOOLS, emptySet()).orEmpty().toSet()
 
@@ -55,6 +67,9 @@ class Prefs(ctx: Context) {
         private const val KEY_PATH = "path"
         private const val KEY_WANTED = "service_wanted"
         private const val KEY_STOP_REMOVED = "stop_on_removed"
+        private const val KEY_THEME = "theme_mode"
+        private const val KEY_ACCENT = "accent"
+        private const val KEY_SCALE = "ui_scale"
         private const val KEY_DISABLED_TOOLS = "disabled_tools"
         private const val KEY_DISABLED_CAPS = "disabled_caps"
 
