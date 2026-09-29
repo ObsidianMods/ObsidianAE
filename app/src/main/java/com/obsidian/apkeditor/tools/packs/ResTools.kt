@@ -41,7 +41,7 @@ class ResTools(private val workspaces: WorkspaceRepository) {
                 } else {
                     ToolResult.Err(ToolErrorCode.UNSUPPORTED,
                         "not plain XML (binary AXML engine not bundled)",
-                        "path" toPathHint())
+                        toPathHint())
                 }
             }),
         ToolDefinition("ae_apk_resource_read", "Read resource",
