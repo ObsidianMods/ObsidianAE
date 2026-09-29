@@ -12,6 +12,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.obsidian.apkeditor.R
 import com.obsidian.apkeditor.app.ObsidianApp
+import com.obsidian.apkeditor.system.GrantRequests
 import com.obsidian.apkeditor.ui.main.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -96,10 +97,13 @@ class McpService : Service() {
 
     companion object {
         const val NOTIF_ID = 41
+        const val GRANT_NOTIF_ID = 42
         const val ACTION_STOP = "com.obsidian.apkeditor.STOP"
         const val ACTION_SHOW_BUBBLE = "com.obsidian.apkeditor.SHOW_BUBBLE"
         const val ACTION_OPEN = "com.obsidian.apkeditor.OPEN_APP"
+        const val ACTION_GRANT = "com.obsidian.apkeditor.GRANT_FOLDER"
         const val CHANNEL_ID = "mcp"
+        const val CHANNEL_GRANT = "grants"
 
         fun start(context: Context) {
             ServiceController.startService(context)
@@ -150,6 +154,60 @@ object McpNotifications {
         runCatching {
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(McpService.NOTIF_ID)
+        }
+    }
+
+    /**
+     * Folder-grant ping: high-priority, auto-dismissing. Tap opens the app
+     * straight into the storage bottom sheet for [path]. Posted at most once
+     * per distinct path (the service dedupes via [GrantRequests]).
+     */
+    fun grantRequest(ctx: Context, path: String) {
+        runCatching {
+            ensureGrantChannel(ctx)
+            val open = PendingIntent.getActivity(
+                ctx, 100,
+                Intent(ctx, MainActivity::class.java)
+                    .setAction(ACTION_GRANT)
+                    .putExtra(GrantRequests.EXTRA_GRANT_PATH, path)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(
+                GRANT_NOTIF_ID,
+                NotificationCompat.Builder(ctx, CHANNEL_GRANT)
+                    .setSmallIcon(R.drawable.ic_mcp)
+                    .setContentTitle("Folder access needed")
+                    .setContentText("The agent needs: $path — tap to grant")
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(
+                        "The agent tried to read $path, which isn't granted. " +
+                            "Tap to open Storage access and pick the folder."))
+                    .setContentIntent(open)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .build(),
+            )
+        }
+    }
+
+    fun cancelGrant(ctx: Context) {
+        runCatching {
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(GRANT_NOTIF_ID)
+        }
+    }
+
+    private fun ensureGrantChannel(ctx: Context) {
+        if (Build.VERSION.SDK_INT < 26) return
+        runCatching {
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (nm.getNotificationChannel(CHANNEL_GRANT) == null) {
+                nm.createNotificationChannel(NotificationChannel(
+                    CHANNEL_GRANT, "Folder access requests",
+                    NotificationManager.IMPORTANCE_HIGH,
+                ))
+            }
         }
     }
 

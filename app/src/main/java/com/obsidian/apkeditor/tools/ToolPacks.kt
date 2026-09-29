@@ -1,14 +1,19 @@
 package com.obsidian.apkeditor.tools
 
+import android.net.Uri
 import com.obsidian.apkeditor.mcp.ServiceController
 import com.obsidian.apkeditor.ops.OperationTracker
+import com.obsidian.apkeditor.system.FileScope
 import com.obsidian.apkeditor.system.Prefs
+import com.obsidian.apkeditor.system.StorageDirs
+import com.obsidian.apkeditor.system.TreePaths
 import com.obsidian.apkeditor.tools.packs.ApkTools
 import com.obsidian.apkeditor.tools.packs.DexTools
 import com.obsidian.apkeditor.tools.packs.EditTools
 import com.obsidian.apkeditor.tools.packs.FileTools
 import com.obsidian.apkeditor.tools.packs.MetaTools
 import com.obsidian.apkeditor.tools.packs.ResTools
+import com.obsidian.apkeditor.tools.packs.ShellTools
 import com.obsidian.apkeditor.tools.packs.SmaliTools
 import com.obsidian.apkeditor.work.WorkspaceRepository
 
@@ -27,8 +32,23 @@ object ToolPacks {
         service: ServiceController,
         sessions: SessionStore,
     ) {
-        // File tools need no context.
-        FileTools().registerAll(registry)
+        // File tools see the default MCP root + every SAF-granted folder
+        // (resolved live from prefs so grants apply without re-warm).
+        // Shell tools share the same scope and grant callback.
+        val fileScope = FileScope(StorageDirs.mcpRoot()) {
+            prefs.folderGrants().mapNotNull { uriStr ->
+                runCatching {
+                    val uri = Uri.parse(uriStr)
+                    val dir = TreePaths.toFile(uri) ?: return@mapNotNull null
+                    FileScope.Root(TreePaths.alias(uri), dir)
+                }.getOrNull()
+            }.distinctBy { it.alias.lowercase() }
+        }
+        val onGrant: (String) -> Unit = { path ->
+            runCatching { service.requestFolderGrant(path) }
+        }
+        FileTools(fileScope, onGrant).registerAll(registry)
+        ShellTools(fileScope, onGrant).registerAll(registry)
         // APK + dex + edit packs need the workspace store.
         ApkTools(service.appContext, workspaces).registerAll(registry)
         DexTools(workspaces).registerAll(registry)

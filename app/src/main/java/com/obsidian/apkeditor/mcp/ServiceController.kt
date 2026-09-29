@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import com.obsidian.apkeditor.mcp.overlay.AssistantOverlay
 import com.obsidian.apkeditor.mcp.overlay.OverlayPermission
+import com.obsidian.apkeditor.system.GrantRequests
 import com.obsidian.apkeditor.system.Prefs
 import com.obsidian.apkeditor.tools.ToolRegistry
 import kotlinx.coroutines.CoroutineScope
@@ -71,6 +72,7 @@ class ServiceController(
     private val overlayHost = object : AssistantOverlay.Host {
         override fun isRunning(): Boolean = _status.value is ServerStatus.Running
         override fun endpointUrl(): String = _status.value.endpointUrl
+        override fun hasPendingGrant(): Boolean = GrantRequests.pending.value != null
         override fun onToggleService() {
             scope.launch {
                 if (_status.value is ServerStatus.Running) {
@@ -220,6 +222,24 @@ class ServiceController(
             return
         }
         refreshOverlay()
+    }
+
+    /**
+     * Called when a tool hits an ungranted folder. Raises the grant sheet
+     * (immediate if the app is foregrounded) and pings once per distinct
+     * path via notification + amber bubble dot. Never throws.
+     */
+    fun requestFolderGrant(path: String) {
+        val fresh = runCatching { GrantRequests.raise(path) }.getOrDefault(false)
+        runCatching { refreshOverlay() }
+        if (fresh) runCatching { McpNotifications.grantRequest(appContext, path) }
+    }
+
+    /** Called when the grant sheet resolves (granted or dismissed). */
+    fun onGrantResolved() {
+        runCatching { GrantRequests.clear() }
+        runCatching { McpNotifications.cancelGrant(appContext) }
+        runCatching { refreshOverlay() }
     }
 
     /**

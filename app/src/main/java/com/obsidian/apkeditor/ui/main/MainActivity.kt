@@ -1,5 +1,6 @@
 package com.obsidian.apkeditor.ui.main
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -10,6 +11,7 @@ import androidx.lifecycle.lifecycleScope
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.mcp.Accent
 import com.obsidian.apkeditor.mcp.ThemeMode
+import com.obsidian.apkeditor.system.GrantRequests
 import com.obsidian.apkeditor.ui.AppNav
 import com.obsidian.apkeditor.ui.theme.ObsidianAETheme
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +28,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Grant notification tap (or any grant deep-link) lands here.
+        raiseGrant(intent)
         // Off-main warm: pure registration, no I/O.
         lifecycleScope.launch {
             withContext(Dispatchers.IO) {
@@ -50,6 +54,17 @@ class MainActivity : AppCompatActivity() {
                 AppNav()
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        raiseGrant(intent)
+    }
+
+    private fun raiseGrant(intent: Intent?) {
+        val path = intent?.getStringExtra(GrantRequests.EXTRA_GRANT_PATH).orEmpty()
+        if (path.isNotEmpty()) runCatching { GrantRequests.raise(path) }
     }
 
     override fun onStart() {

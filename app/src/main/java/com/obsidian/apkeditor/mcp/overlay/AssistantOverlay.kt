@@ -27,6 +27,7 @@ class AssistantOverlay(app: Context) {
     interface Host {
         fun isRunning(): Boolean
         fun endpointUrl(): String
+        fun hasPendingGrant(): Boolean
         fun onToggleService()
     }
 
@@ -78,11 +79,20 @@ class AssistantOverlay(app: Context) {
     fun refresh() {
         val h = host ?: return
         val running = runCatching { h.isRunning() }.getOrDefault(false)
+        val pendingGrant = runCatching { h.hasPendingGrant() }.getOrDefault(false)
         bubble?.findViewById<View>(R.id.bubble_dot)?.setBackgroundResource(
-            if (running) R.drawable.overlay_dot_on else R.drawable.overlay_dot_off)
+            when {
+                pendingGrant -> R.drawable.overlay_dot_warn
+                running -> R.drawable.overlay_dot_on
+                else -> R.drawable.overlay_dot_off
+            })
         panel?.let {
             it.findViewById<TextView>(R.id.panel_status).text =
-                if (running) "Running" else "Stopped"
+                when {
+                    pendingGrant -> "Storage grant needed"
+                    running -> "Running"
+                    else -> "Stopped"
+                }
             it.findViewById<TextView>(R.id.panel_endpoint).text =
                 h.endpointUrl().ifEmpty { "—" }
             it.findViewById<Button>(R.id.panel_toggle).text =

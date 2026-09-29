@@ -35,6 +35,7 @@ enum class ToolErrorCode {
     UNSUPPORTED,
     CORRUPT,
     CANCELLED,
+    NEEDS_GRANT,
     INTERNAL,
 }
 

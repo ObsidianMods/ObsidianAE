@@ -5,6 +5,7 @@ import com.obsidian.apkeditor.tools.ArgSpec
 import com.obsidian.apkeditor.tools.Capability
 import com.obsidian.apkeditor.tools.ToolContext
 import com.obsidian.apkeditor.tools.ToolDefinition
+import com.obsidian.apkeditor.tools.ToolErrorCode
 import com.obsidian.apkeditor.tools.ToolRegistry
 import com.obsidian.apkeditor.tools.ToolResult
 import com.obsidian.apkeditor.tools.boundedInt
@@ -16,17 +17,30 @@ import kotlinx.coroutines.withContext
 /**
  * Scoped file tools. Every read stats FIRST and streams bounded windows —
  * the reference loaded whole files then truncated (OOM vector).
+ *
+ * [FileScope.NeedsGrant] is mapped to NEEDS_GRANT (not a failure): the
+ * [onNeedsGrant] callback raises the grant sheet/notification upstream.
  */
-class FileTools(private val scope: FileScope = FileScope.default()) {
+class FileTools(
+    private val scope: FileScope = FileScope.default(),
+    private val onNeedsGrant: (String) -> Unit = {},
+) {
 
     fun registerAll(r: ToolRegistry) {
         for (t in all()) r.register(t)
     }
 
+    /** Refreshes the visible scope (grants changed while running). */
+    fun rootsSummary(): String =
+        scope.allRoots().joinToString(";") {
+            if (it.alias.isEmpty()) "mcp:" + it.dir.path else "@" + it.alias + ":" + it.dir.path
+        }
+
     private fun all(): List<ToolDefinition> = listOf(
-        def("ae_file_access_policy", "Access policy", "Scope root and rules.",
+        def("ae_file_access_policy", "Access policy", "Scope roots and rules.",
             emptyList(), Capability.FILE_READ) {
-            ok("root" to scope.rootDir().path, "backend" to "scoped-io")
+            ok("roots" to rootsSummary(), "backend" to "scoped-io",
+                "grant_hint" to "address extra folders as @Alias/path; ungranted paths return NEEDS_GRANT")
         },
         def("ae_file_list", "List files", "Names under a prefix.",
             listOf(ArgSpec("prefix", false), ArgSpec("limit", false)), Capability.FILE_READ) { p ->
@@ -186,7 +200,18 @@ class FileTools(private val scope: FileScope = FileScope.default()) {
     private fun def(
         name: String, title: String, desc: String, args: List<ArgSpec>,
         cap: Capability, fn: suspend ToolContext.(Map<String, String>) -> ToolResult,
-    ) = ToolDefinition(name, title, desc, args, cap, fn)
+    ) = ToolDefinition(name, title, desc, args, cap, wrapped@{ params ->
+        try {
+            fn(this, params)
+        } catch (e: FileScope.NeedsGrant) {
+            runCatching { onNeedsGrant(e.path) }
+            ToolResult.Err(
+                ToolErrorCode.NEEDS_GRANT, e.message ?: "folder access needed",
+                "A grant request was raised in the app (notification if backgrounded). " +
+                    "Ask the user to grant the folder, then retry the call.",
+            )
+        }
+    })
 
     private fun ToolContext.ok(vararg pairs: Pair<String, String>) =
         ToolResult.Ok(pairs.associate { it.first to it.second.capped() })

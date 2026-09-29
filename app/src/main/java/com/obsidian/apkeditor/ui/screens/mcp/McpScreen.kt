@@ -39,6 +39,7 @@ import com.obsidian.apkeditor.mcp.ServerStatus
 import com.obsidian.apkeditor.mcp.endpointUrl
 import com.obsidian.apkeditor.mcp.label
 import com.obsidian.apkeditor.mcp.overlay.OverlayPermission
+import com.obsidian.apkeditor.system.GrantRequests
 import com.obsidian.apkeditor.ui.components.EndpointRow
 import com.obsidian.apkeditor.ui.components.ObActionButton
 import com.obsidian.apkeditor.ui.components.ObButtonKind
@@ -205,6 +206,27 @@ fun McpScreen() {
                                 runCatching { app.container.service.refreshOverlay() }
                             }
                         }
+                    )
+                }
+            }
+        }
+
+        item {
+            McpCard {
+                SectionLabel("Storage")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Folder access", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "MCP folder plus any folders you grant. Extra folders are addressed as @Alias/path.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    ObActionButton(
+                        "Manage",
+                        onClick = { GrantRequests.open() },
+                        kind = ObButtonKind.Ghost,
                     )
                 }
             }

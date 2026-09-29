@@ -94,6 +94,20 @@ class Prefs(ctx: Context) {
         sp.edit { putStringSet(KEY_DISABLED_CAPS, next) }
     }
 
+    /** Persisted SAF tree URIs (user-granted folders). Never throws. */
+    fun folderGrants(): Set<String> =
+        sp.getStringSet(KEY_TREES, emptySet()).orEmpty().toSet()
+
+    fun addFolderGrant(uri: String) {
+        val clean = uri.trim()
+        if (clean.isEmpty()) return
+        sp.edit { putStringSet(KEY_TREES, folderGrants() + clean) }
+    }
+
+    fun removeFolderGrant(uri: String) {
+        sp.edit { putStringSet(KEY_TREES, folderGrants() - uri.trim()) }
+    }
+
     companion object {
         const val DEFAULT_PORT = 4123
         const val DEFAULT_PATH = "mcp"
@@ -108,6 +122,7 @@ class Prefs(ctx: Context) {
         private const val KEY_OVERLAY = "show_overlay"
         private const val KEY_DISABLED_TOOLS = "disabled_tools"
         private const val KEY_DISABLED_CAPS = "disabled_caps"
+        private const val KEY_TREES = "folder_grants"
 
         /** Single path segment, `[A-Za-z0-9][A-Za-z0-9_-]*`, max 64 chars. */
         fun sanitize(raw: String): String {

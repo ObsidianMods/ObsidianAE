@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,10 +24,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
 import com.obsidian.apkeditor.R
+import com.obsidian.apkeditor.app.ObsidianApp
+import com.obsidian.apkeditor.system.GrantRequests
 import com.obsidian.apkeditor.ui.components.BarIcon
 import com.obsidian.apkeditor.ui.components.CurveTab
 import com.obsidian.apkeditor.ui.components.CurvedBottomBar
+import com.obsidian.apkeditor.ui.components.StorageGate
+import com.obsidian.apkeditor.ui.components.StorageSheet
 import com.obsidian.apkeditor.ui.screens.mcp.CapabilitiesScreen
 import com.obsidian.apkeditor.ui.screens.mcp.McpScreen
 import com.obsidian.apkeditor.ui.screens.mcp.SettingsScreen
@@ -56,6 +62,10 @@ fun AppNav() {
     var cur by remember { mutableStateOf(Routes.MCP) }
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
     val cs = MaterialTheme.colorScheme
+    // Folder-grant sheet: raised by tool calls (foreground) or by the
+    // grant notification tap (background). Dismiss resolves the request.
+    val app = LocalContext.current.applicationContext as ObsidianApp
+    val pendingGrant by GrantRequests.pending.collectAsState()
 
     Column(Modifier.fillMaxSize().background(cs.background).systemBarsPadding()) {
         Column(Modifier.weight(1f).fillMaxWidth().nestedScroll(scrollBehavior.nestedScrollConnection)) {
@@ -83,5 +93,13 @@ fun AppNav() {
             }
         }
         CurvedBottomBar(tabs = TABS, selectedRoute = cur, onSelect = { cur = it })
+    }
+    // All-files-access gate floats above every tab until granted.
+    StorageGate()
+    if (pendingGrant != null) {
+        StorageSheet(
+            pendingPath = pendingGrant?.takeIf { it.isNotEmpty() },
+            onDismiss = { runCatching { app.container.service.onGrantResolved() } },
+        )
     }
 }
