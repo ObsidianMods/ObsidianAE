@@ -168,15 +168,15 @@ object McpNotifications {
             val open = PendingIntent.getActivity(
                 ctx, 100,
                 Intent(ctx, MainActivity::class.java)
-                    .setAction(ACTION_GRANT)
+                    .setAction(McpService.ACTION_GRANT)
                     .putExtra(GrantRequests.EXTRA_GRANT_PATH, path)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(
-                GRANT_NOTIF_ID,
-                NotificationCompat.Builder(ctx, CHANNEL_GRANT)
+                McpService.GRANT_NOTIF_ID,
+                NotificationCompat.Builder(ctx, McpService.CHANNEL_GRANT)
                     .setSmallIcon(R.drawable.ic_mcp)
                     .setContentTitle("Folder access needed")
                     .setContentText("The agent needs: $path — tap to grant")
@@ -194,7 +194,7 @@ object McpNotifications {
     fun cancelGrant(ctx: Context) {
         runCatching {
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(GRANT_NOTIF_ID)
+            nm.cancel(McpService.GRANT_NOTIF_ID)
         }
     }
 
@@ -202,9 +202,9 @@ object McpNotifications {
         if (Build.VERSION.SDK_INT < 26) return
         runCatching {
             val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (nm.getNotificationChannel(CHANNEL_GRANT) == null) {
+            if (nm.getNotificationChannel(McpService.CHANNEL_GRANT) == null) {
                 nm.createNotificationChannel(NotificationChannel(
-                    CHANNEL_GRANT, "Folder access requests",
+                    McpService.CHANNEL_GRANT, "Folder access requests",
                     NotificationManager.IMPORTANCE_HIGH,
                 ))
             }

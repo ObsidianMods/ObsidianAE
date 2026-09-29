@@ -42,9 +42,12 @@ class FileTools(
             ok("roots" to rootsSummary(), "backend" to "scoped-io",
                 "grant_hint" to "address extra folders as @Alias/path; ungranted paths return NEEDS_GRANT")
         },
-        def("ae_file_list", "List files", "Names under a prefix.",
+        def("ae_file_list", "List files", "Names under a prefix (empty = scope root).",
             listOf(ArgSpec("prefix", false), ArgSpec("limit", false)), Capability.FILE_READ) { p ->
-            val dir = withContext(Dispatchers.IO) { scope.resolve(p.opt("prefix")) }
+            val prefix = p.opt("prefix")
+            val dir = withContext(Dispatchers.IO) {
+                if (prefix.isEmpty()) scope.rootDir() else scope.resolve(prefix)
+            }
             val names = withContext(Dispatchers.IO) {
                 (if (dir.isDirectory) dir.listFiles().orEmpty().toList() else listOf(dir))
                     .sortedBy { it.name }

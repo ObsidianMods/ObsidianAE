@@ -93,25 +93,30 @@ class McpServer(
                     HttpCodec.writeEmpty(out, 400)
                     return
                 }
-                if (!LoopbackGuard.isAllowed(req.headers["origin"])) {
+                val origin = req.headers["origin"]
+                if (!LoopbackGuard.isAllowed(origin)) {
                     HttpCodec.writeJson(out, 403, """{"error":"forbidden origin"}""")
+                    return
+                }
+                if (req.method == "OPTIONS") {
+                    HttpCodec.writeOptions(out, origin)
                     return
                 }
                 val cleanPath = req.path.substringBefore('?')
                 if (cleanPath != prefix && cleanPath != "$prefix/") {
-                    HttpCodec.writeJson(out, 404, """{"error":"unknown path"}""")
+                    HttpCodec.writeJson(out, 404, """{"error":"unknown path"}""", origin)
                     return
                 }
                 when (req.method) {
-                    "GET" -> HttpCodec.writeJson(out, 200, router.toolListJson())
+                    "GET" -> HttpCodec.writeJson(out, 200, router.toolListJson(), origin)
                     "POST" -> {
                         val body = req.body.toString(Charsets.UTF_8)
                         val outcome = router.handleJsonRpc(body)
                         served.incrementAndGet()
-                        if (outcome.json == null) HttpCodec.writeEmpty(out, outcome.status)
-                        else HttpCodec.writeJson(out, outcome.status, outcome.json)
+                        if (outcome.json == null) HttpCodec.writeEmpty(out, outcome.status, origin)
+                        else HttpCodec.writeJson(out, outcome.status, outcome.json, origin)
                     }
-                    else -> HttpCodec.writeEmpty(out, 405)
+                    else -> HttpCodec.writeEmpty(out, 405, origin)
                 }
             }
         } catch (_: Exception) {
@@ -121,6 +126,6 @@ class McpServer(
     }
 
     companion object {
-        private const val MAX_CONNECTIONS = 8
+        private const val MAX_CONNECTIONS = 16
     }
 }

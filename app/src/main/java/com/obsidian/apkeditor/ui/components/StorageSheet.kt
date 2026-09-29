@@ -38,6 +38,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.system.StorageAccess
 import com.obsidian.apkeditor.system.TreePaths
+import com.obsidian.apkeditor.ui.theme.Mono
 
 /**
  * Storage access bottom sheet: the user-facing side of folder grants.

@@ -36,7 +36,7 @@ class ApkTools(
             val ws = withContext(Dispatchers.IO) {
                 workspaces.open(id) ?: run {
                     val file = scope.resolve(id)
-                    require(file.isFile && file.name.endsWith(".apk")) { "not an APK: $id" }
+                    require(file.isFile && file.name.endsWith(".apk", ignoreCase = true)) { "not an APK: $id" }
                     workspaces.importCopy(file, file.name)
                 }
             }
@@ -48,7 +48,7 @@ class ApkTools(
             val limit = p.boundedInt("limit", 50, 1, 200)
             val items = withContext(Dispatchers.IO) {
                 scope.rootDir().listFiles { f ->
-                    f.isFile && f.name.endsWith(".apk") && f.name.startsWith(prefix)
+                    f.isFile && f.name.endsWith(".apk", ignoreCase = true) && f.name.startsWith(prefix)
                 }.orEmpty().sortedBy { it.name }.take(limit)
                     .map { "${it.name}|${it.length()}|${it.lastModified()}" }
             }
@@ -72,15 +72,7 @@ class ApkTools(
             val page = withContext(Dispatchers.IO) {
                 workspaces.listEntries(ws, p.opt("prefix"), 0, WorkLimits.MAX_ENTRIES)
             }
-            val filtered = page.entries.filter { e ->
-                when (view) {
-                    "dex" -> e.path.endsWith(".dex")
-                    "xml" -> e.path.endsWith(".xml")
-                    "res" -> e.path.startsWith("res/") || e.path == "resources.arsc"
-                    "native" -> e.path.startsWith("lib/")
-                    else -> true
-                }
-            }
+            val filtered = page.entries.filter { e -> viewMatches(e.path, view) }
             val slice = filtered.drop(offset).take(limit)
             val next = (offset + slice.size).takeIf { it < filtered.size }?.let { "offset:$it" }
             ok("total" to filtered.size.toString(), "offset" to offset.toString(),
@@ -88,19 +80,24 @@ class ApkTools(
                 "entries" to slice.joinToString(";") { "${it.path}|${it.size}" },
                 page = com.obsidian.apkeditor.tools.Page(offset, limit, filtered.size, next))
         },
-        def("ae_apk_continue", "Continue listing", "Next page via nextCursor.",
-            listOf(ArgSpec("workspaceId", true), ArgSpec("nextCursor", true), ArgSpec("limit", false)),
+        def("ae_apk_continue", "Continue listing", "Next page via nextCursor (same view/prefix as ae_apk_list).",
+            listOf(ArgSpec("workspaceId", true), ArgSpec("nextCursor", true), ArgSpec("limit", false),
+                ArgSpec("view", false, "all|dex|xml|res|native"), ArgSpec("prefix", false)),
             Capability.APK) { p ->
             val ws = wsOf(p.need("workspaceId"))
             val offset = p.need("nextCursor").removePrefix("offset:").toIntOrNull()?.coerceAtLeast(0) ?: 0
             val limit = p.boundedInt("limit", 100, 1, WorkLimits.PAGE_LIMIT)
+            val view = p.opt("view", "all")
             val page = withContext(Dispatchers.IO) {
-                workspaces.listEntries(ws, "", offset, limit)
+                workspaces.listEntries(ws, p.opt("prefix"), 0, WorkLimits.MAX_ENTRIES)
             }
-            ok("total" to page.total.toString(), "offset" to page.offset.toString(),
-                "nextCursor" to (page.nextCursor.orEmpty()),
-                "entries" to page.entries.joinToString(";") { "${it.path}|${it.size}" },
-                page = com.obsidian.apkeditor.tools.Page(page.offset, limit, page.total, page.nextCursor))
+            val filtered = page.entries.filter { e -> viewMatches(e.path, view) }
+            val slice = filtered.drop(offset).take(limit)
+            val next = (offset + slice.size).takeIf { it < filtered.size }?.let { "offset:$it" }
+            ok("total" to filtered.size.toString(), "offset" to offset.toString(),
+                "nextCursor" to (next.orEmpty()),
+                "entries" to slice.joinToString(";") { "${it.path}|${it.size}" },
+                page = com.obsidian.apkeditor.tools.Page(offset, limit, filtered.size, next))
         },
         def("ae_apk_search", "Search entries", "Substring search over entry names.",
             listOf(ArgSpec("workspaceId", true), ArgSpec("query", true), ArgSpec("limit", false)),
@@ -167,6 +164,14 @@ class ApkTools(
 
     private fun wsOf(id: String) =
         workspaces.open(id) ?: throw NoSuchElementException("unknown workspace: $id")
+
+    private fun viewMatches(path: String, view: String): Boolean = when (view) {
+        "dex" -> path.endsWith(".dex")
+        "xml" -> path.endsWith(".xml")
+        "res" -> path.startsWith("res/") || path == "resources.arsc"
+        "native" -> path.startsWith("lib/")
+        else -> true
+    }
 
     private fun def(
         name: String, title: String, desc: String, args: List<ArgSpec>,
