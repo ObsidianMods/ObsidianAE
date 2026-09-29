@@ -10,6 +10,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.obsidian.apkeditor.R
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.ui.main.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -19,9 +20,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Foreground anchor for the MCP server (the reference used a background
- * service that Android 8+ and OEM task killers stop at will). Holds no
- * sockets itself; [ServiceController] owns the server. Stops when not wanted.
+ * Foreground anchor for the MCP runtime. Hosts nothing itself — it keeps the
+ * process alive and delegates overlay/notification state to
+ * [ServiceController], which coordinates server + overlay + notification as
+ * one lifecycle. Never throws out of lifecycle callbacks.
  */
 class McpService : Service() {
 
@@ -29,42 +31,63 @@ class McpService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(NOTIF_ID, McpNotifications.build(this, ""))
+        runCatching {
+            startForeground(NOTIF_ID, McpNotifications.build(this, "Starting…"))
+        }
+        scope.launch {
+            runCatching { controller().onServiceCreated() }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 scope.launch {
-                    runCatching {
-                        (application as ObsidianApp).container.service.stop()
-                    }
+                    runCatching { controller().stop() }
                     stopSelf()
                 }
                 return START_NOT_STICKY
             }
+            ACTION_SHOW_BUBBLE -> {
+                scope.launch {
+                    runCatching { controller().setOverlayVisible(true) }
+                }
+                return START_STICKY
+            }
+            ACTION_OPEN -> {
+                runCatching {
+                    val launch = Intent(this, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launch)
+                }
+                return START_STICKY
+            }
         }
         // Re-anchor: if the controller has no server and service isn't wanted,
-        // stop instead of lingering (reference gap: sticky restart with no socket).
+        // stop instead of lingering with no socket.
         scope.launch {
-            val ctl = (application as ObsidianApp).container.service
+            val ctl = runCatching { controller() }.getOrNull() ?: run {
+                stopSelf()
+                return@launch
+            }
             val running = ctl.status() is ServerStatus.Running
-            val wanted = runCatching { ctlPrefsWanted() }.getOrDefault(false)
+            val wanted = runCatching { ctl.isWanted() }.getOrDefault(false)
             if (!running && !wanted) stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    private fun ctlPrefsWanted(): Boolean =
-        (application as ObsidianApp).container.prefs.serviceWanted
+    private fun controller(): ServiceController =
+        (application as ObsidianApp).container.service
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         scope.launch {
-            runCatching { (application as ObsidianApp).container.service.onTaskRemoved() }
+            runCatching { controller().onTaskRemoved() }
         }
     }
 
     override fun onDestroy() {
+        runCatching { (application as ObsidianApp).container.service.onServiceDestroyed() }
         scope.cancel()
         super.onDestroy()
     }
@@ -74,6 +97,8 @@ class McpService : Service() {
     companion object {
         const val NOTIF_ID = 41
         const val ACTION_STOP = "com.obsidian.apkeditor.STOP"
+        const val ACTION_SHOW_BUBBLE = "com.obsidian.apkeditor.SHOW_BUBBLE"
+        const val ACTION_OPEN = "com.obsidian.apkeditor.OPEN_APP"
         const val CHANNEL_ID = "mcp"
 
         fun start(context: Context) {
@@ -82,24 +107,33 @@ class McpService : Service() {
     }
 }
 
-/** Notification helpers. Channel created once; text-only updates after. */
+/** Notification helpers. Channel created once; actions drive the service. */
 object McpNotifications {
 
     fun build(ctx: Context, endpoint: String): Notification {
         ensureChannel(ctx)
-        val open = PendingIntent.getActivity(
-            ctx, 0, Intent(ctx, MainActivity::class.java),
+        val open = PendingIntent.getService(
+            ctx, 0,
+            Intent(ctx, McpService::class.java).setAction(McpService.ACTION_OPEN),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val stop = PendingIntent.getService(
-            ctx, 1, Intent(ctx, McpService::class.java).setAction(McpService.ACTION_STOP),
+            ctx, 1,
+            Intent(ctx, McpService::class.java).setAction(McpService.ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val bubble = PendingIntent.getService(
+            ctx, 2,
+            Intent(ctx, McpService::class.java).setAction(McpService.ACTION_SHOW_BUBBLE),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return NotificationCompat.Builder(ctx, McpService.CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setSmallIcon(R.drawable.ic_mcp)
             .setContentTitle("Obsidian agent access")
             .setContentText(endpoint.ifEmpty { "Starting…" })
             .setContentIntent(open)
+            .addAction(0, "Open", open)
+            .addAction(0, "Bubble", bubble)
             .addAction(0, "Stop", stop)
             .setOngoing(true)
             .build()

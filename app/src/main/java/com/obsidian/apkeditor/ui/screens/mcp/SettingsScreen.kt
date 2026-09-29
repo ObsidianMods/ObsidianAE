@@ -21,8 +21,8 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,10 +37,11 @@ import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.mcp.Accent
 import com.obsidian.apkeditor.mcp.ThemeMode
 import com.obsidian.apkeditor.system.Prefs
+import com.obsidian.apkeditor.ui.components.AccentOrbit
 import com.obsidian.apkeditor.ui.components.EndpointRow
-import com.obsidian.apkeditor.ui.components.ObSegmentRow
 import com.obsidian.apkeditor.ui.components.ObTextField
 import com.obsidian.apkeditor.ui.components.SectionLabel
+import com.obsidian.apkeditor.ui.components.SlidingSegmented
 import kotlin.math.roundToInt
 
 /**
@@ -53,9 +54,10 @@ fun SettingsScreen() {
     val app = LocalContext.current.applicationContext as ObsidianApp
     val prefs = app.container.prefs
 
-    var theme by remember { mutableStateOf(prefs.themeMode) }
-    var accent by remember { mutableStateOf(prefs.accent) }
-    var scale by remember { mutableFloatStateOf(prefs.uiScale) }
+    // Live theme state — edits recompose MainActivity's theme immediately.
+    val theme by prefs.themeFlow.collectAsState()
+    val accent by prefs.accentFlow.collectAsState()
+    val scale by prefs.scaleFlow.collectAsState()
     var portText by remember { mutableStateOf(prefs.servicePort.toString()) }
     var prefixText by remember { mutableStateOf(prefs.endpointPath) }
     var portError by remember { mutableStateOf<String?>(null) }
@@ -78,22 +80,19 @@ fun SettingsScreen() {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Follow the system or force light / dark. Applies on restart.",
+                    "Follow the system or force light / dark. Applies instantly.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
-                ObSegmentRow(
+                SlidingSegmented(
                     options = listOf(
                         "System" to ThemeMode.SYSTEM.name,
                         "Light" to ThemeMode.LIGHT.name,
                         "Dark" to ThemeMode.DARK.name
                     ),
                     selected = theme,
-                    onSelect = {
-                        theme = it
-                        prefs.themeMode = it
-                    }
+                    onSelect = { prefs.themeMode = it }
                 )
             }
         }
@@ -108,32 +107,16 @@ fun SettingsScreen() {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Used for highlights, sliders and active states. Applies on restart.",
+                    "Used for highlights, sliders and active states. Applies instantly.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(12.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    for (a in Accent.entries) {
-                        val sel = a.name == accent
-                        Box(
-                            Modifier.size(40.dp)
-                                .clip(CircleShape)
-                                .background(accentDot(a))
-                                .then(
-                                    if (sel) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                                    else Modifier.border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f), CircleShape)
-                                )
-                                .clickable {
-                                    accent = a.name
-                                    prefs.accent = a.name
-                                }
-                        )
-                    }
-                }
+                AccentOrbit(
+                    options = Accent.entries.map { accentDot(it) to it.name },
+                    selected = accent,
+                    onSelect = { prefs.accent = it }
+                )
             }
         }
 
@@ -147,7 +130,7 @@ fun SettingsScreen() {
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Scales the whole interface. Applies on restart.",
+                    "Scales the whole interface — watch it resize live.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -155,10 +138,7 @@ fun SettingsScreen() {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Slider(
                         value = scale,
-                        onValueChange = {
-                            scale = it
-                            prefs.uiScale = it
-                        },
+                        onValueChange = { prefs.uiScale = it },
                         valueRange = 0.85f..1.3f,
                         steps = 8,
                         modifier = Modifier.weight(1f),

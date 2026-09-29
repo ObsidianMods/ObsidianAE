@@ -15,6 +15,9 @@
 
     <string name="start_service">Start agent access</string>
     <string name="stop_service">Stop</string>
+    <string name="open_app">Open app</string>
+    <string name="hide">Hide</string>
+    <string name="show_bubble">Show bubble</string>
     <string name="port">Port (1024–65535)</string>
     <string name="endpoint_path">Endpoint path</string>
     <string name="save">Save</string>

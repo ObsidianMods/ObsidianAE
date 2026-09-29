@@ -3,10 +3,17 @@ package com.obsidian.apkeditor.system
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Settings backed by SharedPreferences (not DataStore: the recovery path and
  * the service entry points must read settings without a warm datastore).
+ *
+ * Theme-affecting values are ALSO exposed as hot [StateFlow]s so the UI
+ * (theme mode, accent, scale) recomposes live on change — the previous
+ * snapshot-per-launch design is why the switcher and scaler appeared dead.
  */
 class Prefs(ctx: Context) {
 
@@ -30,16 +37,44 @@ class Prefs(ctx: Context) {
         set(value) = sp.edit { putBoolean(KEY_STOP_REMOVED, value) }
 
     var themeMode: String
-        get() = sp.getString(KEY_THEME, "SYSTEM").orEmpty().takeIf { it.isNotEmpty() } ?: "SYSTEM"
-        set(value) = sp.edit { putString(KEY_THEME, value) }
+        get() = themeFlow.value
+        set(value) {
+            val v = value.takeIf { it.isNotEmpty() } ?: "SYSTEM"
+            sp.edit { putString(KEY_THEME, v) }
+            _themeFlow.value = v
+        }
+
+    private val _themeFlow = MutableStateFlow(
+        sp.getString(KEY_THEME, "SYSTEM").orEmpty().takeIf { it.isNotEmpty() } ?: "SYSTEM")
+    val themeFlow: StateFlow<String> = _themeFlow.asStateFlow()
 
     var accent: String
-        get() = sp.getString(KEY_ACCENT, "VIOLET").orEmpty().takeIf { it.isNotEmpty() } ?: "VIOLET"
-        set(value) = sp.edit { putString(KEY_ACCENT, value) }
+        get() = accentFlow.value
+        set(value) {
+            val v = value.takeIf { it.isNotEmpty() } ?: "VIOLET"
+            sp.edit { putString(KEY_ACCENT, v) }
+            _accentFlow.value = v
+        }
+
+    private val _accentFlow = MutableStateFlow(
+        sp.getString(KEY_ACCENT, "VIOLET").orEmpty().takeIf { it.isNotEmpty() } ?: "VIOLET")
+    val accentFlow: StateFlow<String> = _accentFlow.asStateFlow()
 
     var uiScale: Float
-        get() = sp.getFloat(KEY_SCALE, 1f).coerceIn(0.85f, 1.3f)
-        set(value) = sp.edit { putFloat(KEY_SCALE, value.coerceIn(0.85f, 1.3f)) }
+        get() = scaleFlow.value
+        set(value) {
+            val v = value.coerceIn(0.85f, 1.3f)
+            sp.edit { putFloat(KEY_SCALE, v) }
+            _scaleFlow.value = v
+        }
+
+    private val _scaleFlow = MutableStateFlow(
+        sp.getFloat(KEY_SCALE, 1f).coerceIn(0.85f, 1.3f))
+    val scaleFlow: StateFlow<Float> = _scaleFlow.asStateFlow()
+
+    var showOverlay: Boolean
+        get() = sp.getBoolean(KEY_OVERLAY, true)
+        set(value) = sp.edit { putBoolean(KEY_OVERLAY, value) }
 
     fun disabledTools(): Set<String> =
         sp.getStringSet(KEY_DISABLED_TOOLS, emptySet()).orEmpty().toSet()
@@ -70,6 +105,7 @@ class Prefs(ctx: Context) {
         private const val KEY_THEME = "theme_mode"
         private const val KEY_ACCENT = "accent"
         private const val KEY_SCALE = "ui_scale"
+        private const val KEY_OVERLAY = "show_overlay"
         private const val KEY_DISABLED_TOOLS = "disabled_tools"
         private const val KEY_DISABLED_CAPS = "disabled_caps"
 

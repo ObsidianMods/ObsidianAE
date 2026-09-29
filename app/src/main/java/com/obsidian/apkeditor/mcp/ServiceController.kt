@@ -4,12 +4,15 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.content.ContextCompat
+import com.obsidian.apkeditor.mcp.overlay.AssistantOverlay
+import com.obsidian.apkeditor.mcp.overlay.OverlayPermission
 import com.obsidian.apkeditor.system.Prefs
 import com.obsidian.apkeditor.tools.ToolRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -48,11 +51,36 @@ class ServiceController(
     val appContext: Context = app.applicationContext
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * Single-thread home for every overlay call. WindowManager views must be
+     * added/updated/removed on the thread that created them; the shared IO
+     * pool cannot guarantee that, so the overlay gets its own thread.
+     */
+    private val overlayScope = CoroutineScope(SupervisorJob() +
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "obsidian-overlay").apply { isDaemon = true }
+        }.asCoroutineDispatcher())
     private var serverJob: Job? = null
     private val lock = Mutex()
 
     private var server: McpServer? = null
     private var registryProvider: (() -> ToolRegistry)? = null
+    private val overlay = AssistantOverlay(app.applicationContext)
+
+    private val overlayHost = object : AssistantOverlay.Host {
+        override fun isRunning(): Boolean = _status.value is ServerStatus.Running
+        override fun endpointUrl(): String = _status.value.endpointUrl
+        override fun onToggleService() {
+            scope.launch {
+                if (_status.value is ServerStatus.Running) {
+                    runCatching { stop() }
+                } else {
+                    runCatching { start() }
+                }
+                refreshOverlay()
+            }
+        }
+    }
 
     private val _status = MutableStateFlow<ServerStatus>(ServerStatus.Stopped)
     val statusFlow: StateFlow<ServerStatus> = _status.asStateFlow()
@@ -109,6 +137,7 @@ class ServiceController(
             server.port, endpointUrl(server.port, path), System.currentTimeMillis())
         McpService.start(appContext)
         McpNotifications.show(appContext, endpointUrl(server.port, path))
+        refreshOverlay()
     }
 
     suspend fun stop() {
@@ -141,7 +170,50 @@ class ServiceController(
         prefs.serviceWanted = false
         _status.value = ServerStatus.Stopped
         McpNotifications.cancel(appContext)
+        overlayScope.launch {
+            runCatching { overlay.detach() }
+        }
         runCatching { appContext.stopService(Intent(appContext, McpService::class.java)) }
+    }
+
+    fun isWanted(): Boolean = prefs.serviceWanted
+
+    /** Called from McpService.onCreate: re-anchor overlay + notification. */
+    fun onServiceCreated() {
+        McpNotifications.show(appContext, _status.value.endpointUrl)
+        refreshOverlay()
+    }
+
+    /** Called from McpService.onDestroy: release all overlay views. */
+    fun onServiceDestroyed() {
+        overlayScope.launch {
+            runCatching { overlay.detach() }
+        }
+    }
+
+    /**
+     * Shows the bubble when the user wants it and the overlay permission
+     * allows; hides otherwise. Always runs on the overlay thread.
+     */
+    fun refreshOverlay() {
+        overlayScope.launch {
+            if (prefs.showOverlay && OverlayPermission.granted(appContext)) {
+                runCatching { overlay.attach(overlayHost) }
+            } else {
+                runCatching { overlay.hideBubble() }
+            }
+            runCatching { overlay.refresh() }
+        }
+    }
+
+    fun setOverlayVisible(visible: Boolean) {
+        prefs.showOverlay = visible
+        if (visible && _status.value !is ServerStatus.Running) {
+            // Bubble without a server is pointless — start everything.
+            scope.launch { runCatching { start() } }
+            return
+        }
+        refreshOverlay()
     }
 
     private fun selfTest(port: Int, path: String): Boolean {

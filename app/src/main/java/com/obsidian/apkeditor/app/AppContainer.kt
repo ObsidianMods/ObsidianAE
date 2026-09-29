@@ -29,9 +29,15 @@ class AppContainer(app: Context) {
     val sessions: SessionStore = SessionStore()
     val service: ServiceController = ServiceController(appContext, prefs)
 
+    init {
+        // Registry provider attached at construction (not warm): an early
+        // Start tap before warm() finishes must still find the registry
+        // instead of failing with "tools not ready".
+        service.attachRegistry { tools }
+    }
+
     /** Registers all tool packs. Pure registration, no I/O. */
     fun warm() {
         ToolPacks.registerAll(tools, appContext, workspaces, operations, prefs, service, sessions)
-        service.attachRegistry { tools }
     }
 }

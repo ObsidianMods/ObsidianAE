@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -18,29 +19,38 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.mcp.ServerStatus
 import com.obsidian.apkeditor.mcp.endpointUrl
 import com.obsidian.apkeditor.mcp.label
+import com.obsidian.apkeditor.mcp.overlay.OverlayPermission
 import com.obsidian.apkeditor.ui.components.EndpointRow
 import com.obsidian.apkeditor.ui.components.ObActionButton
 import com.obsidian.apkeditor.ui.components.ObButtonKind
+import com.obsidian.apkeditor.ui.components.ObSwitch
 import com.obsidian.apkeditor.ui.components.SectionLabel
 import com.obsidian.apkeditor.ui.components.StatusDot
 import kotlinx.coroutines.launch
 
 /**
- * MCP connection page: endpoint, service control. Ported from the backup UI
- * and adapted to the rebuilt container/prefs (sync reads, suspend control).
- * Overlay gate and remote endpoints are dropped — this build serves loopback
- * only, with no floating bubble.
+ * MCP connection page: endpoint, service control, floating assistant toggle.
+ * Ported from the backup UI and adapted to the rebuilt container/prefs
+ * (sync reads, suspend control). Loopback only; no remote endpoints.
  */
 @Composable
 fun McpScreen() {
@@ -61,6 +71,42 @@ fun McpScreen() {
         ) {
             notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    // Overlay gate: no system dialog exists for this permission, so the start
+    // flow sends the user to Settings and resumes when they come back.
+    var pendingOverlayStart by remember { mutableStateOf(false) }
+    val overlayLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (OverlayPermission.granted(ctx)) {
+            pendingOverlayStart = false
+            scope.launch { runCatching { app.container.service.start() } }
+        }
+    }
+
+    fun startWithOverlayGate() {
+        ensureNotifPerm()
+        if (OverlayPermission.granted(ctx)) {
+            scope.launch { runCatching { app.container.service.start() } }
+        } else {
+            pendingOverlayStart = true
+            overlayLauncher.launch(OverlayPermission.requestIntent(ctx))
+        }
+    }
+
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && pendingOverlayStart &&
+                OverlayPermission.granted(ctx)
+            ) {
+                pendingOverlayStart = false
+                scope.launch { runCatching { app.container.service.start() } }
+            }
+        }
+        owner.lifecycle.addObserver(obs)
+        onDispose { owner.lifecycle.removeObserver(obs) }
     }
 
     val running = status as? ServerStatus.Running
@@ -102,11 +148,16 @@ fun McpScreen() {
                     )
                     else -> ObActionButton(
                         "Start service",
-                        onClick = {
-                            ensureNotifPerm()
-                            scope.launch { runCatching { app.container.service.start() } }
-                        },
+                        onClick = { startWithOverlayGate() },
                         modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                if (pendingOverlayStart) {
+                    Text(
+                        "Enable “Display over other apps” for Obsidian AE, then return here — " +
+                            "the service starts automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
                 if (status is ServerStatus.Error) {
@@ -123,6 +174,39 @@ fun McpScreen() {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        item {
+            McpCard {
+                SectionLabel("Floating assistant")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Bubble overlay", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "Draggable MCP bubble with a quick menu. Needs “Display over other apps”.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    var overlayOn by remember {
+                        mutableStateOf(app.container.prefs.showOverlay)
+                    }
+                    ObSwitch(
+                        checked = overlayOn,
+                        onCheckedChange = { checked ->
+                            if (checked && !OverlayPermission.granted(ctx)) {
+                                pendingOverlayStart = true
+                                overlayLauncher.launch(OverlayPermission.requestIntent(ctx))
+                            }
+                            overlayOn = checked
+                            app.container.prefs.showOverlay = checked
+                            scope.launch {
+                                runCatching { app.container.service.refreshOverlay() }
+                            }
+                        }
+                    )
+                }
             }
         }
     }
