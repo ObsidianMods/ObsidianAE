@@ -24,6 +24,19 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Launch guard: any boot failure routes to Recovery with a report
+        // instead of hanging on the system splash.
+        val bootError = runCatching { boot(savedInstanceState) }.exceptionOrNull()
+        if (bootError != null) {
+            runCatching {
+                CrashStore.writeCrash(this, Thread.currentThread(), bootError)
+                startActivity(Intent(this, RecoveryActivity::class.java))
+            }
+            finish()
+        }
+    }
+
+    private fun boot(savedInstanceState: Bundle?) {
         // Crash-first: pending report wins over normal boot.
         val pending = runCatching { CrashStore.consumePending(this) }.getOrNull()
         if (pending != null) {
