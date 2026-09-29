@@ -4,13 +4,12 @@ import android.content.Context
 import java.io.File
 
 /**
- * File-backed crash state. No preferences, no threads, no singletons holding
- * contexts — every function takes what it needs and closes what it opens.
+ * File-backed crash state. Application class and recovery screen only —
+ * never referenced from MainActivity or any other UI.
  *
  * Files (under `<filesDir>/crash/`):
  * - `crash_log.txt` — last fatal crash report (overwritten per crash).
- * - `anr_log.txt`   — last ANR report (separate file: ANRs never overwrite crashes).
- * - `pending`       — name of the log awaiting display (`crash` or `anr`).
+ * - `anr_log.txt`   — last ANR report (separate file, never overwrites crashes).
  * - `crashes.idx`   — crash timestamps (millis, one per line, capped at 20).
  */
 object CrashStore {
@@ -18,64 +17,37 @@ object CrashStore {
     const val KIND_CRASH = "crash"
     const val KIND_ANR = "anr"
 
-    /** Consecutive crashes inside this window trigger safe mode. */
+    /** Consecutive crashes inside this window flag safe mode (recovery UI only). */
     private const val SAFE_WINDOW_MS = 60_000L
     private const val SAFE_COUNT = 3
     private const val MAX_LOG_CHARS = 32_768
     private const val MAX_INDEX_ROWS = 20
 
-    data class Pending(val kind: String, val text: String)
-
     private fun dir(ctx: Context): File = File(ctx.filesDir, "crash")
 
     private fun file(ctx: Context, name: String): File = File(dir(ctx), name)
 
-    /** Records a fatal crash. Returns true when the app should boot into safe mode. */
-    fun writeCrash(ctx: Context, thread: Thread, error: Throwable): Boolean {
-        val report = buildReport("FATAL", thread, error).take(MAX_LOG_CHARS)
-        return try {
-            dir(ctx).mkdirs()
-            file(ctx, "crash_log.txt").writeText(report)
-            // Marker AFTER the log so a viewer crash cannot re-arm without evidence.
-            file(ctx, "pending").writeText(KIND_CRASH)
-            appendTimestamp(ctx, System.currentTimeMillis())
-            inSafeMode(ctx)
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    /** Records an ANR. Never touches the crash log or the pending marker. */
-    fun writeAnr(ctx: Context, detail: String) {
+    /** Writes the fatal log and records a timestamp. Never throws. */
+    fun writeCrash(ctx: Context, report: String) {
         try {
             dir(ctx).mkdirs()
-            val head = "ANR ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
-                .format(java.util.Date())}\n"
-            file(ctx, "anr_log.txt").writeText((head + detail).take(MAX_LOG_CHARS))
+            file(ctx, "crash_log.txt").writeText(report.take(MAX_LOG_CHARS))
+            appendTimestamp(ctx, System.currentTimeMillis())
         } catch (_: Exception) {
         }
     }
 
-    /**
-     * Consumes the pending marker. The marker is deleted BEFORE the log is read,
-     * so a crash inside the recovery screen cannot loop.
-     */
-    fun consumePending(ctx: Context): Pending? {
-        return try {
-            val marker = file(ctx, "pending")
-            if (!marker.exists()) return null
-            val kind = marker.readText().trim().take(16)
-            marker.delete()
-            val logName = if (kind == KIND_ANR) "anr_log.txt" else "crash_log.txt"
-            val text = file(ctx, logName).takeIf { it.exists() }?.readText().orEmpty()
-            if (text.isEmpty()) null else Pending(kind.ifEmpty { KIND_CRASH }, text)
+    /** Writes the ANR log. Never touches the crash log. Never throws. */
+    fun writeAnr(ctx: Context, report: String) {
+        try {
+            dir(ctx).mkdirs()
+            file(ctx, "anr_log.txt").writeText(report.take(MAX_LOG_CHARS))
         } catch (_: Exception) {
-            null
         }
     }
 
-    /** Last fatal report without consuming anything. */
-    fun lastFatal(ctx: Context): String {
+    /** Last fatal report, or empty. Never throws. */
+    fun readLastLog(ctx: Context): String {
         return try {
             file(ctx, "crash_log.txt").takeIf { it.exists() }?.readText().orEmpty()
         } catch (_: Exception) {
@@ -105,30 +77,5 @@ object CrashStore {
             idx.writeText((rows + now.toString()).joinToString("\n"))
         } catch (_: Exception) {
         }
-    }
-
-    private fun buildReport(kind: String, thread: Thread, error: Throwable): String {
-        val sb = StringBuilder(4096)
-        sb.append(kind).append(' ')
-            .append(android.os.Build.MANUFACTURER).append(' ')
-            .append(android.os.Build.MODEL).append(" API ")
-            .append(android.os.Build.VERSION.SDK_INT).append('\n')
-        sb.append("thread=").append(thread.name).append('\n')
-        appendTrace(sb, error, 0)
-        var cause = error.cause
-        var depth = 0
-        while (cause != null && depth < 4) {
-            sb.append("Caused by: ")
-            appendTrace(sb, cause, 0)
-            cause = cause.cause
-            depth++
-        }
-        return sb.toString()
-    }
-
-    private fun appendTrace(sb: StringBuilder, e: Throwable, skip: Int) {
-        sb.append(e.javaClass.name).append(": ").append(e.message).append('\n')
-        val frames = e.stackTrace.drop(skip).take(40)
-        for (f in frames) sb.append("    at ").append(f.toString()).append('\n')
     }
 }

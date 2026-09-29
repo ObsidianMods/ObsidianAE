@@ -9,7 +9,6 @@ import androidx.lifecycle.lifecycleScope
 import com.obsidian.apkeditor.R
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.databinding.FragmentHomeBinding
-import com.obsidian.apkeditor.recovery.CrashStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,14 +31,13 @@ class HomeFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         binding.homeStatus.text = getString(R.string.ready)
         viewLifecycleOwner.lifecycleScope.launch {
-            val (safe, count) = withContext(Dispatchers.IO) {
-                val app = requireContext().applicationContext as ObsidianApp
-                val s = runCatching { CrashStore.inSafeMode(app) }.getOrDefault(false)
-                val c = runCatching { app.container.workspaces.list().size }.getOrDefault(0)
-                s to c
+            val count = withContext(Dispatchers.IO) {
+                runCatching {
+                    val app = requireContext().applicationContext as ObsidianApp
+                    app.container.workspaces.list().size
+                }.getOrDefault(0)
             }
             if (!isAdded || _binding == null) return@launch
-            if (safe) binding.homeStatus.text = getString(R.string.safe_mode_on)
             binding.homeDetail.text = getString(R.string.home_detail, count)
         }
     }

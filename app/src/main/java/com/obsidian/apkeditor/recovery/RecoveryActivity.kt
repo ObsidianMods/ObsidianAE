@@ -3,71 +3,80 @@ package com.obsidian.apkeditor.recovery
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.os.Bundle
+import android.os.Process
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.databinding.DataBindingUtil
 import com.obsidian.apkeditor.R
 import com.obsidian.apkeditor.databinding.ActivityRecoveryBinding
-import com.obsidian.apkeditor.ui.main.MainActivity
+import kotlin.system.exitProcess
 
 /**
- * Isolated recovery surface.
- *
- * Safety contract (do not weaken):
- * - XML layout + Data Binding only, AppCompat widgets only.
- * - References [CrashStore] and nothing else — never the container, tools,
- *   workspaces, or services. Safe to launch when everything else is broken.
- * - Every I/O call is guarded; this screen must never throw.
+ * Isolated recovery surface (mirrors the original CrashActivity contract).
+ * Reads the log from the intent extra, else the last stored log.
+ * References [CrashStore] and nothing else — safe when everything else
+ * is broken. Never referenced from any other activity.
  */
 class RecoveryActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityRecoveryBinding
+    private var logText: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = DataBindingUtil.setContentView(this, R.layout.activity_recovery)
 
-        val safeMode = intent.getBooleanExtra(EXTRA_SAFE_MODE, false) ||
-            runCatching { CrashStore.inSafeMode(this) }.getOrDefault(false)
+        logText = intent.getStringExtra(EXTRA_LOG)
+            ?: runCatching { CrashStore.readLastLog(this) }.getOrDefault("")
+        if (logText.isEmpty()) logText = getString(R.string.recovery_no_details)
 
-        val pending = runCatching { CrashStore.consumePending(this) }.getOrNull()
-        val report = pending?.text
-            ?: runCatching { CrashStore.lastFatal(this) }.getOrDefault("")
-
-        binding.recoveryStatus.text = when {
-            safeMode -> getString(R.string.recovery_safe_mode)
-            pending?.kind == CrashStore.KIND_ANR -> getString(R.string.recovery_anr)
-            report.isNotEmpty() -> getString(R.string.recovery_crash)
-            else -> getString(R.string.recovery_empty)
+        val safeMode = runCatching { CrashStore.inSafeMode(this) }.getOrDefault(false)
+        binding.recoveryStatus.text = if (safeMode) {
+            getString(R.string.recovery_safe_mode)
+        } else if (logText.startsWith("=== ANR ===")) {
+            getString(R.string.recovery_anr)
+        } else {
+            getString(R.string.recovery_crash)
         }
-        binding.recoveryLog.text = report.ifEmpty { getString(R.string.recovery_no_details) }
+        binding.recoveryLog.text = logText
 
         binding.btnCopy.setOnClickListener {
-            copyReport(report)
+            copyReport()
         }
         binding.btnRestart.setOnClickListener {
-            val launch = Intent(this, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            runCatching { startActivity(launch) }
-            finish()
+            restartApp()
         }
         binding.btnClose.setOnClickListener {
-            finishAndRemoveTask()
+            Process.killProcess(Process.myPid())
+            exitProcess(0)
         }
     }
 
-    private fun copyReport(report: String) {
-        if (report.isEmpty()) return
+    private fun copyReport() {
+        if (logText.isEmpty()) return
         runCatching {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("obsidian-crash", report.take(24_000)))
+            cm.setPrimaryClip(ClipData.newPlainText("obsidian-crash", logText.take(24_000)))
             Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show()
         }
     }
 
+    private fun restartApp() {
+        runCatching {
+            val launch = packageManager.getLaunchIntentForPackage(packageName)
+            if (launch != null) {
+                launch.addFlags(
+                    android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                        android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(launch)
+            }
+        }
+        Process.killProcess(Process.myPid())
+        exitProcess(0)
+    }
+
     companion object {
-        const val EXTRA_SAFE_MODE = "extra_safe_mode"
+        const val EXTRA_LOG = "extra_log"
     }
 }

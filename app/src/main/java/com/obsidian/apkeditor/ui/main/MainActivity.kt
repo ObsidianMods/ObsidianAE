@@ -1,6 +1,5 @@
 package com.obsidian.apkeditor.ui.main
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.databinding.DataBindingUtil
@@ -9,14 +8,16 @@ import androidx.lifecycle.lifecycleScope
 import com.obsidian.apkeditor.R
 import com.obsidian.apkeditor.app.ObsidianApp
 import com.obsidian.apkeditor.databinding.ActivityMainBinding
-import com.obsidian.apkeditor.recovery.CrashStore
-import com.obsidian.apkeditor.recovery.RecoveryActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Single launcher activity (Data Binding, no Compose, no splash proxy).
+ * Single launcher activity (Data Binding, no crash code of any kind).
+ *
+ * Crash handling lives exclusively in the application class + recovery
+ * screen: this activity performs zero crash file I/O and references no
+ * recovery types, so a broken crash subsystem can never stall its startup.
  *
  * The fragment container is registered once: each tab is added under a stable
  * tag on first selection and shown/hidden afterwards, so fragment state
@@ -29,26 +30,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Launch guard: any boot failure routes to Recovery with a report
-        // instead of hanging on the system splash.
-        val bootError = runCatching { boot(savedInstanceState) }.exceptionOrNull()
-        if (bootError != null) {
-            runCatching {
-                CrashStore.writeCrash(this, Thread.currentThread(), bootError)
-                startActivity(Intent(this, RecoveryActivity::class.java))
-            }
-            finish()
-        }
-    }
-
-    private fun boot(savedInstanceState: Bundle?) {
-        // Crash-first: pending report wins over normal boot.
-        val pending = runCatching { CrashStore.consumePending(this) }.getOrNull()
-        if (pending != null) {
-            startActivity(Intent(this, RecoveryActivity::class.java))
-            finish()
-            return
-        }
         binding = DataBindingUtil.setContentView(this, R.layout.activity_main)
 
         binding.bottomNav.setOnItemSelectedListener { item ->
@@ -76,26 +57,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Off-main warm: pure registration, no I/O. Safe-mode skips service resume.
+        // Off-main warm: pure registration, no I/O.
         lifecycleScope.launch {
-            val safe = withContext(Dispatchers.IO) {
-                runCatching {
-                    val app = application as ObsidianApp
-                    app.container.warm()
-                    CrashStore.inSafeMode(app)
-                }.getOrDefault(false)
+            withContext(Dispatchers.IO) {
+                runCatching { (application as ObsidianApp).container.warm() }
             }
-            if (!safe) {
-                runCatching {
-                    (application as ObsidianApp).container.service.resumeIfWanted()
-                }
+            runCatching {
+                (application as ObsidianApp).container.service.resumeIfWanted()
             }
         }
     }
 
     override fun onStart() {
         super.onStart()
-        if (!::binding.isInitialized) return
         lifecycleScope.launch {
             runCatching {
                 (application as ObsidianApp).container.service.resumeIfWanted()
