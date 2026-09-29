@@ -3,9 +3,35 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+import java.util.Properties
+
+// Global signing: single "obsidian" config from key.properties (shipped to git).
+// Used for BOTH debug and release. Falls back to SDK debug key when absent.
+val keyPropsFile = rootProject.file("key.properties")
+val keyProps = Properties()
+if (keyPropsFile.exists()) {
+    keyPropsFile.inputStream().use { stream -> keyProps.load(stream) }
+}
+val hasSigningKey = keyPropsFile.exists()
+
 android {
     namespace = "com.obsidian.apkeditor"
     compileSdk = libs.versions.compileSdk.get().toInt()
+
+    signingConfigs {
+        if (hasSigningKey) {
+            create("obsidian") {
+                val storeFilePath = keyProps.getProperty("storeFile") ?: "release.jks"
+                val resolved = rootProject.file(storeFilePath).let {
+                    if (it.exists()) it else project.file(storeFilePath)
+                }
+                storeFile = resolved
+                storePassword = keyProps.getProperty("storePassword")
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.obsidian.apkeditor"
@@ -16,12 +42,24 @@ android {
     }
 
     buildTypes {
+        debug {
+            signingConfig = if (hasSigningKey) {
+                signingConfigs.getByName("obsidian")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = if (hasSigningKey) {
+                signingConfigs.getByName("obsidian")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

@@ -9,5 +9,8 @@
 .externalNativeBuild/
 .cxx/
 app/build/
+# Signing keys are normally ignored, but this repo intentionally ships
+# its dev key (rotatable before production). Only this exact file is tracked:
 *.jks
 *.keystore
+!release.jks

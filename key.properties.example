@@ -1,0 +1,4 @@
+storeFile=release.jks
+storePassword=CHANGE_ME
+keyAlias=obsidian
+keyPassword=CHANGE_ME
