@@ -69,10 +69,6 @@ android {
         targetCompatibility = java
     }
 
-    kotlin {
-        jvmToolchain(libs.versions.java.get().toInt())
-    }
-
     buildFeatures {
         compose = true
     }
