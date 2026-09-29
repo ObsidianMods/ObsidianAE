@@ -9,6 +9,11 @@
 .externalNativeBuild/
 .cxx/
 app/build/
+# R8 / build byproducts that sometimes land next to sources:
+app/proguard-dictionary.txt
+app/proguard-mapping.txt
+app/proguard-seeds.txt
+app/proguard-usage.txt
 # Signing keys are normally ignored, but this repo intentionally ships
 # its dev key (rotatable before production). Only this exact file is tracked:
 *.jks
