@@ -10,6 +10,8 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import com.obsidian.apkeditor.R
 import com.obsidian.apkeditor.app.ObsidianApp
+import com.obsidian.apkeditor.mcp.endpointUrl
+import com.obsidian.apkeditor.mcp.label
 import kotlinx.coroutines.launch
 
 /** Service control tab: endpoint status + start/stop. */
@@ -46,10 +48,12 @@ class ServiceFragment : Fragment() {
             }
         }
         stop.setOnClickListener {
-            runCatching {
-                (requireContext().applicationContext as ObsidianApp).container.service.stop()
+            viewLifecycleOwner.lifecycleScope.launch {
+                runCatching {
+                    (requireContext().applicationContext as ObsidianApp).container.service.stop()
+                }
+                if (isAdded) refresh()
             }
-            refresh()
         }
     }
 }

@@ -66,8 +66,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
-        runCatching {
-            (application as ObsidianApp).container.service.resumeIfWanted()
+        lifecycleScope.launch {
+            runCatching {
+                (application as ObsidianApp).container.service.resumeIfWanted()
+            }
         }
     }
 
