@@ -242,17 +242,18 @@ class ShellTools(
     private fun split(cmd: String): List<String> {
         val out = mutableListOf<String>()
         val cur = StringBuilder()
-        var quote = ' '
+        var quote: Char? = null
         var esc = false
         var has = false
         for (c in cmd) {
             when {
                 esc -> { cur.append(c); esc = false; has = true }
-                c == '\\' && quote == ' ' -> { esc = true; has = true }
-                (c == '\'' || c == '"') && quote == ' ' -> { quote = c; has = true }
-                c == quote -> quote = ' '
-                quote != ' ' -> { cur.append(c); has = true }
-                c.isWhitespace() -> { if (has) { out.add(cur.toString()); cur.clear(); has = false } }
+                c == '\\' && quote == null -> { esc = true; has = true }
+                quote != null && c == quote -> quote = null
+                quote == null && (c == '\'' || c == '"') -> { quote = c; has = true }
+                quote == null && c.isWhitespace() -> {
+                    if (has) { out.add(cur.toString()); cur.clear(); has = false }
+                }
                 else -> { cur.append(c); has = true }
             }
         }

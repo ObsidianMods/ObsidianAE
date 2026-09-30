@@ -57,11 +57,13 @@ class SmaliTools(
                 val method = p.opt("method")
                 val text = withContext(Dispatchers.IO) {
                     val bytes = workspaces.readBytes(ws, dexName, 0, WorkLimits.ENTRY_BYTES.toInt())
-                    var out = SmaliBridge.disassembleClass(bytes, p.need("descriptor"), max, tmp)
+                    // Disassemble wide, filter, THEN clip: filtering the
+                    // maxChars-truncated text lost methods past the cut.
+                    var out = SmaliBridge.disassembleClass(bytes, p.need("descriptor"), 100_000, tmp)
                     if (method.isNotEmpty()) {
                         out = filterMethod(out, method) ?: throw NoSuchElementException("no such method")
                     }
-                    out
+                    out.take(max)
                 }
                 ok("class" to p.need("descriptor"), "smali" to text)
             }),

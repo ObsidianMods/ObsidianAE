@@ -65,7 +65,8 @@ class McpService : Service() {
             }
         }
         // Re-anchor: if the controller has no server and service isn't wanted,
-        // stop instead of lingering with no socket.
+        // stop instead of lingering with no socket. STICKY otherwise: after
+        // an OEM kill the system recreates us and we re-anchor the socket.
         scope.launch {
             val ctl = runCatching { controller() }.getOrNull() ?: run {
                 stopSelf()
@@ -73,9 +74,13 @@ class McpService : Service() {
             }
             val running = ctl.status() is ServerStatus.Running
             val wanted = runCatching { ctl.isWanted() }.getOrDefault(false)
-            if (!running && !wanted) stopSelf()
+            if (!running && !wanted) {
+                stopSelf()
+                return@launch
+            }
+            if (wanted && !running) runCatching { ctl.resumeIfWanted() }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     private fun controller(): ServiceController =

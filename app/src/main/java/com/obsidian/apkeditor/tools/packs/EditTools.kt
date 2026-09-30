@@ -162,11 +162,25 @@ class EditTools(
         sessions.resolve(session)?.let { workspaces.open(it) }
             ?: throw NoSuchElementException("unknown session")
 
-    /** Output names are bare file names — never paths. */
+    /** Output names are bare file names, output/-prefixed, or absolute paths
+     * inside the output dir — never traversals. */
     private fun guardedOutput(dir: java.io.File, name: String): java.io.File {
-        require(name.isNotEmpty() && '/' !in name && '\\' !in name) { "bad file name" }
-        require(name != "." && name != ".." && !name.startsWith(".")) { "bad file name" }
-        return java.io.File(dir, name)
+        require(name.isNotEmpty() && '\u0000' !in name) { "bad file name" }
+        val stripped = name.removePrefix("output/").removePrefix("./")
+        if (java.io.File(name).isAbsolute) {
+            val base = dir.canonicalFile
+            val target = java.io.File(name).canonicalFile
+            require(target != base && target.path.startsWith(base.path + "/")) {
+                "outside output dir"
+            }
+            require('/' !in target.name && target.name.isNotEmpty()) { "bad file name" }
+            return target
+        }
+        require('/' !in stripped && '\\' !in stripped) { "bad file name" }
+        require(stripped != "." && stripped != ".." && !stripped.startsWith(".")) {
+            "bad file name"
+        }
+        return java.io.File(dir, stripped)
     }
 
     private data class DevKey(
@@ -180,13 +194,16 @@ class EditTools(
      * Dev signing key, staged by the agent in the MCP folder
      * (`key.properties` + the keystore it points at). Nothing secret ships
      * inside the APK; absence reports UNSUPPORTED with placement guidance.
+     * Tip: copy the project's own release.jks + key.properties template
+     * into the MCP folder (storeFile is relative to that folder).
      */
     private fun loadDevKey(): DevKey {
         val root = com.obsidian.apkeditor.system.FileScope.default().rootDir()
         val propsFile = java.io.File(root, "key.properties")
         if (!propsFile.isFile) {
             throw UnsupportedOperationException(
-                "dev key not staged: place release.jks + key.properties in the MCP folder")
+                "dev key not staged: copy release.jks + key.properties into ${root.path}/ " +
+                    "(storeFile inside key.properties is relative to that folder)")
         }
         val props = java.util.Properties()
         propsFile.inputStream().use { props.load(it) }

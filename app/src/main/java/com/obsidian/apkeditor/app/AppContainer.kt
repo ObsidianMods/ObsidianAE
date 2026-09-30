@@ -26,7 +26,7 @@ class AppContainer(app: Context) {
     val operations: OperationTracker = OperationTracker()
     val workspaces: WorkspaceRepository = ZipWorkspaces(appContext)
     val tools: ToolRegistry = ToolRegistry()
-    val sessions: SessionStore = SessionStore()
+    val sessions: SessionStore = SessionStore(appContext)
     val service: ServiceController = ServiceController(appContext, prefs)
 
     init {

@@ -59,6 +59,7 @@ class FileTools(
         def("ae_file_stat", "Stat path", "Type, size, mtime.",
             listOf(ArgSpec("path", true)), Capability.FILE_READ) { p ->
             val f = withContext(Dispatchers.IO) { scope.resolve(p.need("path")) }
+            require(f.exists()) { "not found: ${p.need("path")}" }
             ok("dir" to f.isDirectory.toString(), "size" to f.length().toString(),
                 "mtime" to f.lastModified().toString())
         },

@@ -121,7 +121,9 @@ class JsonRpcRouter(private val registry: ToolRegistry) {
         val keys = obj.keys()
         while (keys.hasNext()) {
             val k = keys.next()
-            if (k == "tool" || k == "name") continue
+            // NOTE: no routing-key skipping here. The tool name is extracted
+            // from params BEFORE this runs, so "name" inside arguments is a
+            // legitimate tool argument (ae_file_rename broke on this).
             out[k] = obj.opt(k)?.toString().orEmpty()
         }
         return out

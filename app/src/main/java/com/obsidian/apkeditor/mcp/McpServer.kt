@@ -1,22 +1,27 @@
 package com.obsidian.apkeditor.mcp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
 
 /**
  * Loopback-only HTTP server. Fixes the reference failure modes:
- * - Accept failures back off instead of killing the server after 10.
- * - Concurrent connections capped ([MAX_CONNECTIONS]); overflow gets 503-style 400.
+ * - Accept loop is immortal: EVERY throwable is caught and backed off, so
+ *   the loop can never die while the socket stays bound (that state accepts
+ *   TCP but returns zero bytes — the worst failure mode, now impossible).
+ * - A watchdog ([ensureAccepting]) relaunches the loop if it ever stops.
+ * - Concurrent connections capped ([MAX_CONNECTIONS]); overflow gets 400.
  * - Per-connection socket timeout so stalled clients cannot pin threads.
  */
 class McpServer(
@@ -26,17 +31,33 @@ class McpServer(
     private val scope = CoroutineScope(parentContext + Job())
     private val inFlight = Semaphore(MAX_CONNECTIONS)
     private val served = AtomicLong(0)
+    private val acceptErrors = AtomicLong(0)
+    private val lastAcceptError = AtomicReference("")
+    private val startedAt = AtomicLong(0)
 
     @Volatile
     private var socket: ServerSocket? = null
 
     @Volatile
+    private var prefix = "/mcp"
+
+    @Volatile
+    private var loopJob: Job? = null
+
+    @Volatile
     var port: Int = -1
         private set
 
-    fun isAlive(): Boolean = socket?.let { !it.isClosed && it.isBound } ?: false
+    /** Bound socket AND a live accept loop — the only true "serving" state. */
+    fun isAlive(): Boolean {
+        val s = socket
+        return s != null && !s.isClosed && s.isBound && loopJob?.isActive == true
+    }
 
     fun servedCalls(): Long = served.get()
+    fun acceptErrorCount(): Long = acceptErrors.get()
+    fun lastAcceptError(): String = lastAcceptError.get()
+    fun uptimeMs(): Long = startedAt.get().let { if (it == 0L) 0 else System.currentTimeMillis() - it }
 
     suspend fun start(port: Int, path: String) {
         stop()
@@ -45,11 +66,26 @@ class McpServer(
         server.bind(InetSocketAddress("127.0.0.1", port))
         socket = server
         this.port = server.localPort
-        val prefix = "/" + path.trim('/')
-        scope.launch(Dispatchers.IO) { acceptLoop(server, prefix) }
+        prefix = "/" + path.trim('/')
+        startedAt.set(System.currentTimeMillis())
+        ensureAccepting()
+    }
+
+    /**
+     * Relaunches the accept loop if it stopped while the socket is still
+     * bound. Called at start and by the controller watchdog.
+     */
+    fun ensureAccepting() {
+        val server = socket ?: return
+        if (server.isClosed || !scope.isActive) return
+        val job = loopJob
+        if (job?.isActive == true) return
+        loopJob = scope.launch(Dispatchers.IO) { acceptLoop(server) }
     }
 
     fun stop() {
+        loopJob?.cancel()
+        loopJob = null
         runCatching { socket?.close() }
         socket = null
         port = -1
@@ -60,17 +96,27 @@ class McpServer(
         scope.coroutineContext[Job]?.cancel()
     }
 
-    private suspend fun acceptLoop(server: ServerSocket, prefix: String) {
+    private suspend fun acceptLoop(server: ServerSocket) {
         var backoffMs = 100L
         while (scope.isActive && !server.isClosed) {
             try {
                 val client = server.accept()
                 backoffMs = 100L
                 scope.launch(Dispatchers.IO) { handle(client, prefix) }
-            } catch (e: IOException) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (t: Throwable) {
+                // Anything else (IO failure, runtime bug, launch on a dying
+                // scope): count it, back off, and KEEP ACCEPTING. A dead loop
+                // on a bound socket is the zero-bytes hang — never again.
                 if (server.isClosed || !scope.isActive) break
-                // Back off, never die (reference broke the loop after 10).
-                kotlinx.coroutines.delay(backoffMs)
+                acceptErrors.incrementAndGet()
+                lastAcceptError.set((t.message ?: t.javaClass.simpleName).take(200))
+                try {
+                    delay(backoffMs)
+                } catch (e: CancellationException) {
+                    throw e
+                }
                 backoffMs = minOf(backoffMs * 2, 5_000L)
             }
         }
