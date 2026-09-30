@@ -201,6 +201,11 @@ class ServiceController(
     }
 
     fun onTaskRemoved() {
+        // Foreground survival: a wanted endpoint outlives a swipe-away
+        // (Mod-Menu pattern uses stopWithTask=true because a game crash is
+        // worse than a kill; for an MCP server the opposite holds — a kill
+        // IS the bug). Only honor stopOnTaskRemoved when nothing is wanted.
+        if (isWanted()) return
         if (prefs.stopOnTaskRemoved) stopAsync()
     }
 
@@ -358,14 +363,29 @@ class ServiceController(
 
     companion object {
         /**
-         * Plain startService (background service). Allowed while the app is
-         * visible or the user just tapped a notification/bubble action; a
-         * refusal (BackgroundServiceStartNotAllowedException) is swallowed
-         * because the overlay window itself keeps the process alive.
+         * Foreground start (Mod-Menu pattern: Activity is UI-only, Service
+         * owns the server+overlay). startForegroundService on O+ is
+         * mandatory — plain startService from background throws
+         * BackgroundServiceStartNotAllowedException on API 31+ and the
+         * service dies minimized. The Service must call startForeground
+         * within ~5s (McpService.onCreate does).
          */
         fun startService(context: Context) {
-            runCatching { context.startService(Intent(context, McpService::class.java)) }
-                .onFailure { android.util.Log.w("ObsidianService", "startService refused", it) }
+            val intent = Intent(context, McpService::class.java)
+            try {
+                if (android.os.Build.VERSION.SDK_INT >= 26) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (t: Throwable) {
+                // Last resort: plain start (foreground app, old API).
+                runCatching { context.startService(intent) }
+                    .onFailure { android.util.Log.w("ObsidianService", "startService refused", it) }
+                if (t is IllegalStateException) {
+                    android.util.Log.w("ObsidianService", "FGS start refused", t)
+                }
+            }
         }
     }
 }

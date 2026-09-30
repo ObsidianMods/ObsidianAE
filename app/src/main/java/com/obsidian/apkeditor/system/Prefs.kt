@@ -33,7 +33,7 @@ class Prefs(ctx: Context) {
         set(value) = sp.edit { putBoolean(KEY_WANTED, value) }
 
     var stopOnTaskRemoved: Boolean
-        get() = sp.getBoolean(KEY_STOP_REMOVED, true)
+        get() = sp.getBoolean(KEY_STOP_REMOVED, false)
         set(value) = sp.edit { putBoolean(KEY_STOP_REMOVED, value) }
 
     var themeMode: String

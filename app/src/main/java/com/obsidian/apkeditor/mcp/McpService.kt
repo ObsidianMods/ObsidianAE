@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -21,11 +22,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Background anchor for the MCP runtime (NOT a foreground service). It hosts
- * nothing itself: overlay (bubble + control panel), server and notification
- * are coordinated by [ServiceController]. While the bubble window is attached
- * to the system the process stays visible to the OS; START_STICKY re-anchors
- * after an OEM kill. Never throws out of lifecycle callbacks.
+ * Foreground owner of the MCP runtime (Mod-Menu pattern: the Activity is
+ * UI-only, the Service owns the job). It hosts the ServerSocket + overlay
+ * bubble via [ServiceController]: startForeground keeps the process alive
+ * after the app leaves the foreground (a plain background Service is killed
+ * in ~1 min stock, instantly on Transsion/MTK; the overlay window alone does
+ * NOT exempt it). START_STICKY re-anchors after an OEM kill. Never throws
+ * out of lifecycle callbacks.
  */
 class McpService : Service() {
 
@@ -33,16 +36,26 @@ class McpService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Must promote within ~5s of startForegroundService, before any
+        // async work. Placeholder text is replaced once the endpoint is up.
+        runCatching { promoteToForeground("") }
         // Overlay work must happen on the main thread (WindowManager needs a
         // Looper); the controller posts to Main itself.
         runCatching { controller().onServiceCreated() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Every entry re-asserts foreground: the system can recreate us
+        // without onCreate ordering guarantees after an OEM kill.
+        runCatching { promoteToForeground(controller().status().endpointUrl) }
         when (intent?.action) {
             ACTION_STOP -> {
                 scope.launch {
                     runCatching { controller().stop(exit = true) }
+                    runCatching {
+                        if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
+                        else @Suppress("DEPRECATION") stopForeground(true)
+                    }
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -74,18 +87,49 @@ class McpService : Service() {
             val wanted = runCatching { ctl.isWanted() }.getOrDefault(false)
             val bubble = runCatching { ctl.overlayWanted() }.getOrDefault(false)
             if (!running && !wanted && !bubble) {
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
+                    else @Suppress("DEPRECATION") stopForeground(true)
+                }
                 stopSelf()
                 return@launch
             }
             if (wanted && !running) runCatching { ctl.resumeIfWanted() }
+            // Refresh the ongoing notification with the real endpoint once up.
+            runCatching { promoteToForeground(ctl.status().endpointUrl) }
         }
         return START_STICKY
+    }
+
+    /**
+     * Foreground promotion (Mod-Menu lesson: the Service owns the job, so it
+     * must own the foreground state too). dataSync type matches the manifest;
+     * falls back gracefully on old APIs / missing permission.
+     */
+    private fun promoteToForeground(endpoint: String) {
+        val notif = McpNotifications.build(this, endpoint)
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                startForeground(
+                    NOTIF_ID, notif,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+        } catch (_: Throwable) {
+            // Last resort: foreground without a type (old API) — still far
+            // better than a background service that dies minimized.
+            runCatching { startForeground(NOTIF_ID, notif) }
+        }
     }
 
     private fun controller(): ServiceController =
         (application as ObsidianApp).container.service
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // Foreground + stopWithTask=false: we survive a swipe-away when the
+        // endpoint is wanted; the controller decides (wanted wins).
         scope.launch {
             runCatching { controller().onTaskRemoved() }
         }
@@ -93,6 +137,10 @@ class McpService : Service() {
 
     override fun onDestroy() {
         runCatching { (application as ObsidianApp).container.service.onServiceDestroyed() }
+        runCatching {
+            if (Build.VERSION.SDK_INT >= 24) stopForeground(STOP_FOREGROUND_REMOVE)
+            else @Suppress("DEPRECATION") stopForeground(true)
+        }
         scope.cancel()
         super.onDestroy()
     }

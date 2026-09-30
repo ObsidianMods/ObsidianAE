@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Foreground service: the MCP loopback endpoint must survive the app
+         leaving the foreground (background Service is killed in ~1 min on
+         stock Android, instantly on Transsion/MTK). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- Default MCP tree lives on shared storage; without this, mkdir/File
          I/O under /storage/emulated/0 silently fails on Android 11+. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
@@ -34,13 +39,14 @@
             android:exported="false"
             android:theme="@style/Theme.ObsidianAE" />
 
-        <!-- Plain (background) service: hosts the MCP endpoint and attaches the
-             floating bubble + control panel to the system window layer. It is
-             deliberately NOT a foreground service; the overlay window keeps the
-             process visible to the system while the bubble is shown. -->
+        <!-- Foreground service: hosts the MCP endpoint. stopWithTask=false
+             so swiping the app away calls onTaskRemoved (where we decide)
+             instead of killing the service outright. -->
         <service
             android:name=".mcp.McpService"
-            android:exported="false" />
+            android:exported="false"
+            android:stopWithTask="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>
