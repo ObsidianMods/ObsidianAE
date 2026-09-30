@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 rootProject.name = "Obsidian AE"
 include(":app")
 include(":apktools")
+include(":zipalign")

@@ -108,6 +108,7 @@ dependencies {
     implementation(libs.androidx.compose.icons.extended)
 
     implementation(project(":apktools"))
+    implementation(project(":zipalign"))
 
     implementation(libs.apksig.android)
 

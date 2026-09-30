@@ -1,11 +1,14 @@
 package com.obsidian.apkeditor.work
 
+import com.iyxan23.zipalignjava.ZipAlign
 import java.io.File
 import java.io.RandomAccessFile
 
 /**
- * 4-byte + 4096-for-.so alignment rewrite. Operates entry by entry with a
- * fixed buffer (the reference loaded whole APKs into RAM).
+ * APK alignment via the vendored zipalign-java module (MIT): 4-byte data
+ * alignment with native libraries on 16KiB page boundaries. Unaligned .so
+ * entries are an install-time/load-time hazard (Android 15+ enforces 16KiB
+ * pages), which the previous byte-copy stub did nothing about.
  */
 object ZipAligner {
 
@@ -13,24 +16,28 @@ object ZipAligner {
         check(apk.isFile) { "not a file" }
         val tmp = File(apk.parentFile, apk.name + ".aligned")
         align(apk, tmp)
+        check(tmp.isFile && tmp.length() > 0) { "align produced no output" }
         check(tmp.setLastModified(apk.lastModified())) { "touch failed" }
         check(apk.delete()) { "replace failed" }
         check(tmp.renameTo(apk)) { "rename failed" }
     }
 
     fun align(src: File, dst: File) {
-        RandomAccessFile(src, "r").use { ins ->
-            dst.outputStream().buffered(65_536).use { out ->
-                // Minimal, dependency-free: copy STORED entries with padding so
-                // data offsets land on 4-byte boundaries (.so pages handled by
-                // writer alignment below). Full DEFLATE recompression is out of
-                // scope for v1; the container stays installable.
-                val bytes = ByteArray(65_536)
-                var n: Int
-                while (ins.read(bytes).also { n = it } >= 0) {
-                    out.write(bytes, 0, n)
+        check(src.isFile) { "not a file: ${src.path}" }
+        dst.parentFile?.mkdirs()
+        try {
+            RandomAccessFile(src, "r").use { ins ->
+                dst.outputStream().buffered(65_536).use { out ->
+                    ZipAlign.alignZip(ins, out)
                 }
             }
+        } catch (e: com.iyxan23.zipalignjava.InvalidZipException) {
+            runCatching { dst.delete() }
+            throw IllegalStateException("not a valid zip: ${e.message}")
+        } catch (e: java.io.IOException) {
+            runCatching { dst.delete() }
+            throw IllegalStateException("align I/O failed: ${e.message}")
         }
+        check(dst.isFile && dst.length() > 0) { "align produced no output" }
     }
 }
