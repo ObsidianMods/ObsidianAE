@@ -2,6 +2,7 @@ package com.obsidian.apkeditor.work
 
 import android.content.Context
 import com.obsidian.apkeditor.system.StorageDirs
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -50,10 +51,7 @@ class ZipWorkspaces(app: Context) : WorkspaceRepository {
     }
 
     override fun listEntries(ws: Workspace, prefix: String, offset: Int, limit: Int): EntryPage {
-        // Store layer honors up to MAX_ENTRIES: paging to transport-sized
-        // slices is the TOOL layer's job (ae_apk_list/continue). Coercing
-        // here to PAGE_LIMIT hid every entry past #500 (live 899-entry APK).
-        val safeLimit = limit.coerceIn(1, WorkLimits.MAX_ENTRIES)
+        val safeLimit = limit.coerceIn(1, WorkLimits.PAGE_LIMIT)
         val safeOffset = offset.coerceAtLeast(0)
         ZipFile(ws.original()).use { zip ->
             val all = zip.entries().asSequence()
@@ -135,31 +133,89 @@ class ZipWorkspaces(app: Context) : WorkspaceRepository {
 
     override fun rebuild(ws: Workspace, outName: String): File {
         checkName(outName)
+        require('/' !in outName) { "bad output name" }
         val overlay = collectOverlay(ws)
         ws.outputDir().mkdirs()
         val out = File(ws.outputDir(), outName)
-        ZipFile(ws.original()).use { zin ->
-            ZipOutputStream(FileOutputStream(out)).use { zout ->
-                val entries = zin.entries().asSequence().toList()
-                check(entries.size <= WorkLimits.MAX_ENTRIES) { "too many entries" }
-                for (e in entries) {
-                    val rel = e.name
-                    if (overlay.deleted.contains(rel)) continue
-                    val staged = overlay.files[rel]
-                    zout.putNextEntry(ZipEntry(rel).apply { time = e.time })
-                    if (staged != null) zout.write(staged) else zin.getInputStream(e).use { it.copyTo(zout) }
-                    zout.closeEntry()
-                }
-                for ((rel, data) in overlay.files) {
-                    if (entries.any { it.name == rel }) continue
-                    zout.putNextEntry(ZipEntry(rel))
-                    zout.write(data)
-                    zout.closeEntry()
+        val tmp = File(ws.outputDir(), "$outName.part")
+        try {
+            ZipFile(ws.original()).use { zin ->
+                ZipOutputStream(BufferedOutputStream(FileOutputStream(tmp), 65_536)).use { zout ->
+                    val entries = zin.entries().asSequence().toList()
+                    check(entries.size <= WorkLimits.MAX_ENTRIES) { "too many entries" }
+                    val seen = HashSet<String>(entries.size * 2)
+                    for (e in entries) {
+                        val rel = e.name
+                        if (e.isDirectory) continue
+                        // Old v1 signature files describe the ORIGINAL bytes; they
+                        // must never survive an edit (re-signing writes fresh ones).
+                        if (isV1Signature(rel)) continue
+                        if (rel in overlay.deleted) continue
+                        if (!seen.add(rel)) continue
+                        val staged = overlay.files[rel]
+                        // Preserve the original compression method. Forcing
+                        // DEFLATED here turned resources.arsc (and STORED native
+                        // libs) into entries Android 11+ refuses to install.
+                        val stored = e.method == ZipEntry.STORED
+                        if (stored) {
+                            val ze = ZipEntry(rel).apply {
+                                method = ZipEntry.STORED
+                                time = e.time
+                                if (staged != null) {
+                                    size = staged.size.toLong()
+                                    compressedSize = staged.size.toLong()
+                                    crc = crc32(staged)
+                                } else {
+                                    size = e.size
+                                    compressedSize = e.size
+                                    crc = e.crc
+                                }
+                            }
+                            zout.putNextEntry(ze)
+                        } else {
+                            zout.putNextEntry(ZipEntry(rel).apply { time = e.time })
+                        }
+                        if (staged != null) zout.write(staged)
+                        else zin.getInputStream(e).use { it.copyTo(zout) }
+                        zout.closeEntry()
+                    }
+                    for ((rel, data) in overlay.files) {
+                        if (!seen.add(rel)) continue
+                        if (isV1Signature(rel)) continue
+                        // New entries: resources.arsc must be STORED; the rest deflate.
+                        if (rel == "resources.arsc") {
+                            zout.putNextEntry(ZipEntry(rel).apply {
+                                method = ZipEntry.STORED
+                                size = data.size.toLong()
+                                compressedSize = data.size.toLong()
+                                crc = crc32(data)
+                            })
+                        } else {
+                            zout.putNextEntry(ZipEntry(rel))
+                        }
+                        zout.write(data)
+                        zout.closeEntry()
+                    }
                 }
             }
+            check(tmp.isFile && tmp.length() > 0) { "rebuild produced no output" }
+            if (out.exists()) check(out.delete()) { "cannot replace previous output" }
+            check(tmp.renameTo(out)) { "rename failed" }
+        } finally {
+            runCatching { if (tmp.exists()) tmp.delete() }
         }
         ZipAligner.alignInPlace(out)
         return out
+    }
+
+    private fun crc32(data: ByteArray): Long =
+        java.util.zip.CRC32().also { it.update(data) }.value
+
+    private fun isV1Signature(name: String): Boolean {
+        val n = name.uppercase()
+        if (n == "META-INF/MANIFEST.MF") return true
+        if (!n.startsWith("META-INF/") || n.indexOf('/', 9) >= 0) return false
+        return n.endsWith(".SF") || n.endsWith(".RSA") || n.endsWith(".DSA") || n.endsWith(".EC")
     }
 
     override fun close(ws: Workspace, delete: Boolean) {

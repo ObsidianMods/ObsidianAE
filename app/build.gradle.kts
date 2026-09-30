@@ -15,6 +15,15 @@ if (keyPropsFile.exists()) {
 }
 val hasSigningKey = keyPropsFile.exists()
 
+// Ship the project's dev signing key (already committed at the repo root) as
+// assets/devkey/ so ae_apk_build can sign its output out of the box. A
+// key.properties + keystore staged in the MCP folder still takes priority.
+val syncDevKeyAssets = tasks.register<Sync>("syncDevKeyAssets") {
+    from(rootProject.file("key.properties")) { into("devkey") }
+    from(rootProject.file("release.jks")) { into("devkey") }
+    into(layout.buildDirectory.dir("generated/devkey-assets"))
+}
+
 android {
     namespace = "com.obsidian.apkeditor"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -82,6 +91,8 @@ android {
     buildFeatures {
         compose = true
     }
+
+    sourceSets.getByName("main").assets.srcDir(syncDevKeyAssets.map { it.destinationDir })
 
     packaging {
         resources {

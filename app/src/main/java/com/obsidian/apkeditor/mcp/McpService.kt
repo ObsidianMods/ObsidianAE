@@ -21,10 +21,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * Foreground anchor for the MCP runtime. Hosts nothing itself — it keeps the
- * process alive and delegates overlay/notification state to
- * [ServiceController], which coordinates server + overlay + notification as
- * one lifecycle. Never throws out of lifecycle callbacks.
+ * Background anchor for the MCP runtime (NOT a foreground service). It hosts
+ * nothing itself: overlay (bubble + control panel), server and notification
+ * are coordinated by [ServiceController]. While the bubble window is attached
+ * to the system the process stays visible to the OS; START_STICKY re-anchors
+ * after an OEM kill. Never throws out of lifecycle callbacks.
  */
 class McpService : Service() {
 
@@ -32,19 +33,16 @@ class McpService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        runCatching {
-            startForeground(NOTIF_ID, McpNotifications.build(this, "Starting…"))
-        }
-        scope.launch {
-            runCatching { controller().onServiceCreated() }
-        }
+        // Overlay work must happen on the main thread (WindowManager needs a
+        // Looper); the controller posts to Main itself.
+        runCatching { controller().onServiceCreated() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 scope.launch {
-                    runCatching { controller().stop() }
+                    runCatching { controller().stop(exit = true) }
                     stopSelf()
                 }
                 return START_NOT_STICKY
@@ -74,7 +72,8 @@ class McpService : Service() {
             }
             val running = ctl.status() is ServerStatus.Running
             val wanted = runCatching { ctl.isWanted() }.getOrDefault(false)
-            if (!running && !wanted) {
+            val bubble = runCatching { ctl.overlayWanted() }.getOrDefault(false)
+            if (!running && !wanted && !bubble) {
                 stopSelf()
                 return@launch
             }

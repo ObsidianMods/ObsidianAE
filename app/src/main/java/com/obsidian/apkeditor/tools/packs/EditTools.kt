@@ -24,6 +24,7 @@ class EditTools(
     private val workspaces: WorkspaceRepository,
     private val operations: OperationTracker,
     private val sessions: SessionStore,
+    private val app: android.content.Context,
 ) {
 
     fun registerAll(r: ToolRegistry) {
@@ -83,28 +84,76 @@ class EditTools(
             }
             ok("resId" to p.need("resId"), "key" to key, "staged" to "true")
         },
-        def("ae_apk_build", "Build APK", "Rebuild + align into output/. Poll ae_ops_get.",
-            listOf(ArgSpec("sessionId", true), ArgSpec("outName", false)), Capability.EDIT) { p ->
+        def("ae_apk_build", "Build APK",
+            "Rebuild (compression preserved, stale signatures dropped, aligned), validate " +
+                "dex/manifest/arsc/alignment, then sign v1+v2 and verify. sign=false skips signing.",
+            listOf(ArgSpec("sessionId", true), ArgSpec("outName", false),
+                ArgSpec("sign", false, "true|false (default true)")), Capability.EDIT) { p ->
             val ws = sessionWs(p.need("sessionId"))
             val outName = p.opt("outName", "rebuilt.apk").takeIf { it.isNotEmpty() } ?: "rebuilt.apk"
+            val wantSign = p.opt("sign", "true").lowercase() != "false"
             val op = operations.create("apk.build", "build $outName")
             try {
                 operations.update(op.id) { it.copy(status = OpStatus.RUNNING) }
-                val out = withContext(Dispatchers.IO) { workspaces.rebuild(ws, outName) }
-                // Post-align audit: rebuild aligns in place; assert it here so
-                // installability is proven on every build, not assumed.
-                val audit = withContext(Dispatchers.IO) {
-                    runCatching { com.obsidian.apkeditor.work.ZipAligner.verify(out) }.getOrNull()
+                val result = withContext(Dispatchers.IO) {
+                    val built = workspaces.rebuild(ws, outName)
+                    val tmp = java.io.File(app.cacheDir, "validate").apply { mkdirs() }
+                    val report = com.obsidian.apkeditor.work.ApkValidator.validate(
+                        built, ws.original(), tmp)
+                    if (!report.ok) {
+                        runCatching { built.delete() }
+                        throw IllegalStateException("build invalid: " + report.summary())
+                    }
+                    var signed: java.io.File? = null
+                    var signNote = ""
+                    var verified = false
+                    if (wantSign) {
+                        val signedName = outName.removeSuffix(".apk") + "-signed.apk"
+                        val target = guardedOutput(ws.outputDir(), signedName)
+                        try {
+                            val key = loadDevKey()
+                            com.obsidian.apkeditor.work.SigningBridge.sign(
+                                built, target, key.storeFile, key.storePassword,
+                                key.alias, key.keyPassword)
+                            val v = com.obsidian.apkeditor.work.SigningBridge.verify(target)
+                            verified = v.verified
+                            if (!v.verified) {
+                                signNote = "signature failed verification: " +
+                                    v.errors.take(3).joinToString(";")
+                            }
+                            val align = com.obsidian.apkeditor.work.ApkValidator
+                                .alignmentProblems(target)
+                            if (align.isNotEmpty()) {
+                                signNote += (if (signNote.isEmpty()) "" else " | ") +
+                                    "alignment after signing: " + align.first()
+                            }
+                            signed = target
+                        } catch (e: Exception) {
+                            runCatching { target.delete() }
+                            signNote = "not signed: " + e.message.orEmpty().take(200)
+                        }
+                    }
+                    arrayOf<Any?>(built, report, signed, verified, signNote)
                 }
+                val built = result[0] as java.io.File
+                val report = result[1] as com.obsidian.apkeditor.work.ApkValidator.Report
+                val signed = result[2] as java.io.File?
+                val verified = result[3] as Boolean
+                val signNote = result[4] as String
                 sessions.close(p.need("sessionId"))
+                val finalPath = (signed ?: built).path
                 operations.update(op.id) {
-                    it.copy(status = OpStatus.SUCCEEDED, progress = 1f, resultPath = out.path)
+                    it.copy(status = OpStatus.SUCCEEDED, progress = 1f, resultPath = finalPath)
                 }
-                ok("operationId" to op.id, "status" to "SUCCEEDED", "output" to out.path,
-                    "aligned_stored" to (audit?.stored?.toString() ?: "?"),
-                    "aligned_mis4" to (audit?.misaligned4?.toString() ?: "?"),
-                    "aligned_so" to (audit?.nativeLibs?.toString() ?: "?"),
-                    "aligned_so_miss" to (audit?.pageMiss?.toString() ?: "?"))
+                val installable = signed != null && verified && signNote.isEmpty()
+                ok("operationId" to op.id, "status" to "SUCCEEDED",
+                    "output" to built.path,
+                    "signedOutput" to signed?.path.orEmpty(),
+                    "installable" to installable.toString(),
+                    "validation" to report.summary(),
+                    "warnings" to report.warnings.joinToString(";"),
+                    "signature" to (if (signed == null) "unsigned" else if (verified) "v1+v2 verified" else "unverified"),
+                    "note" to signNote)
             } catch (e: Exception) {
                 operations.update(op.id) {
                     it.copy(status = OpStatus.FAILED, error = e.message.orEmpty().take(300))
@@ -209,25 +258,39 @@ class EditTools(
     private fun loadDevKey(): DevKey {
         val root = com.obsidian.apkeditor.system.FileScope.default().rootDir()
         val propsFile = java.io.File(root, "key.properties")
-        if (!propsFile.isFile) {
-            throw UnsupportedOperationException(
-                "dev key not staged: copy release.jks + key.properties into ${root.path}/ " +
-                    "(storeFile inside key.properties is relative to that folder)")
+        if (propsFile.isFile) {
+            val props = java.util.Properties()
+            propsFile.inputStream().use { props.load(it) }
+            val store = java.io.File(root,
+                props.getProperty("storeFile")?.takeIf { it.isNotEmpty() } ?: "release.jks")
+            if (!store.isFile) {
+                throw UnsupportedOperationException("keystore missing next to key.properties")
+            }
+            return devKeyOf(store, props)
         }
-        val props = java.util.Properties()
-        propsFile.inputStream().use { props.load(it) }
-        val store = java.io.File(root,
-            props.getProperty("storeFile")?.takeIf { it.isNotEmpty() } ?: "release.jks")
-        if (!store.isFile) {
-            throw UnsupportedOperationException("keystore missing next to key.properties")
-        }
-        return DevKey(
-            storeFile = store,
-            storePassword = props.getProperty("storePassword").orEmpty(),
-            alias = props.getProperty("keyAlias")?.takeIf { it.isNotEmpty() } ?: "obsidian",
-            keyPassword = props.getProperty("keyPassword").orEmpty(),
-        )
+        return bundledDevKey() ?: throw UnsupportedOperationException(
+            "no signing key: copy release.jks + key.properties into ${root.path}/ " +
+                "(storeFile inside key.properties is relative to that folder)")
     }
+
+    /** The project's shipped dev keystore, packaged as assets/devkey/ at build time. */
+    private fun bundledDevKey(): DevKey? = runCatching {
+        val dir = java.io.File(app.cacheDir, "devkey").apply { mkdirs() }
+        val props = java.util.Properties()
+        app.assets.open("devkey/key.properties").use { props.load(it) }
+        val store = java.io.File(dir, "release.jks")
+        app.assets.open("devkey/release.jks").use { ins ->
+            store.outputStream().use { ins.copyTo(it) }
+        }
+        devKeyOf(store, props)
+    }.getOrNull()
+
+    private fun devKeyOf(store: java.io.File, props: java.util.Properties) = DevKey(
+        storeFile = store,
+        storePassword = props.getProperty("storePassword").orEmpty(),
+        alias = props.getProperty("keyAlias")?.takeIf { it.isNotEmpty() } ?: "obsidian",
+        keyPassword = props.getProperty("keyPassword").orEmpty(),
+    )
 
     private fun String.hexToBytes(): ByteArray {
         val clean = filter { it.isLetterOrDigit() }

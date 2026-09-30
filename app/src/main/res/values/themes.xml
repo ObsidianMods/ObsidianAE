@@ -3,4 +3,23 @@
     <style name="Theme.ObsidianAE" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
     </style>
+
+    <!-- Themed context for the service-hosted overlay (bubble + control panel). -->
+    <style name="Theme.ObsidianAE.Overlay" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorAccent">#B79CFF</item>
+        <item name="colorControlActivated">#B79CFF</item>
+        <item name="colorControlNormal">#8A8494</item>
+        <item name="android:textColorPrimary">#F1ECFA</item>
+        <item name="android:textColorSecondary">#C9BFD9</item>
+        <item name="alertDialogTheme">@style/Theme.ObsidianAE.Overlay.Dialog</item>
+    </style>
+
+    <style name="Theme.ObsidianAE.Overlay.Dialog" parent="Theme.AppCompat.Dialog.Alert">
+        <item name="colorAccent">#B79CFF</item>
+        <item name="colorControlActivated">#B79CFF</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowMinWidthMajor">0dp</item>
+        <item name="android:windowMinWidthMinor">0dp</item>
+    </style>
 </resources>

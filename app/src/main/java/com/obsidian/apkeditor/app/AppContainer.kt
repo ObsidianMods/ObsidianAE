@@ -29,15 +29,24 @@ class AppContainer(app: Context) {
     val sessions: SessionStore = SessionStore(appContext)
     val service: ServiceController = ServiceController(appContext, prefs)
 
+    private var warmed = false
+
     init {
-        // Registry provider attached at construction (not warm): an early
-        // Start tap before warm() finishes must still find the registry
-        // instead of failing with "tools not ready".
-        service.attachRegistry { tools }
+        // Registry provider attached at construction. It also warms the tool
+        // packs (idempotent): the service can be recreated by the OS with no
+        // Activity ever running, and previously that produced an endpoint
+        // that answered tools/list with an empty registry.
+        service.attachRegistry {
+            warm()
+            tools
+        }
     }
 
-    /** Registers all tool packs. Pure registration, no I/O. */
+    /** Registers all tool packs once. Pure registration, no I/O. */
+    @Synchronized
     fun warm() {
+        if (warmed) return
         ToolPacks.registerAll(tools, appContext, workspaces, operations, prefs, service, sessions)
+        warmed = true
     }
 }

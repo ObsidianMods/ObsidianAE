@@ -40,22 +40,44 @@ object SmaliBridge {
         }
     }
 
+    /** smali writes syntax errors to System.err; serialize + capture them. */
+    private val errLock = Any()
+
+    /**
+     * Assembles with the real smali assembler. On failure the thrown message
+     * carries the assembler's own diagnostics (line/column), not a bare
+     * "assembly failed".
+     */
     fun assemble(smaliText: String, apiLevel: Int, tmpDir: File): ByteArray {
         require(smaliText.toByteArray().size <= 2 * 1024 * 1024) { "too large" }
+        tmpDir.mkdirs()
         val work = tmpDir.resolve("smali-${System.nanoTime()}").apply { mkdirs() }
         try {
-            val input = work.resolve("input.smali").apply {
-                writeText(smaliText)
-            }
+            val input = work.resolve("input.smali").apply { writeText(smaliText) }
             val out = work.resolve("out.dex")
             val options = com.android.tools.smali.smali.SmaliOptions().apply {
                 this.apiLevel = apiLevel.coerceIn(21, 35)
                 this.jobs = 1
                 this.outputDexFile = out.path
             }
-            val ok = com.android.tools.smali.smali.Smali.assemble(
-                options, listOf(input.path))
-            if (!ok || !out.isFile) throw IllegalStateException("assembly failed")
+            val captured = java.io.ByteArrayOutputStream()
+            var ok = false
+            synchronized(errLock) {
+                val prev = System.err
+                System.setErr(java.io.PrintStream(captured, true, "UTF-8"))
+                try {
+                    ok = com.android.tools.smali.smali.Smali.assemble(
+                        options, listOf(input.path))
+                } finally {
+                    System.setErr(prev)
+                }
+            }
+            if (!ok || !out.isFile) {
+                val diag = captured.toString("UTF-8").trim()
+                    .replace(input.path, "input.smali").take(1500)
+                throw IllegalStateException(
+                    "smali assembly failed" + if (diag.isNotEmpty()) ":\n$diag" else "")
+            }
             check(out.length() <= WorkLimits.ENTRY_BYTES) { "output too large" }
             return out.readBytes()
         } finally {

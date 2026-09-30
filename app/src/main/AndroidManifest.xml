@@ -3,8 +3,6 @@
 
     <!-- Loopback ServerSocket requires the inet group (documented EPERM lesson). -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <!-- Default MCP tree lives on shared storage; without this, mkdir/File
@@ -36,10 +34,13 @@
             android:exported="false"
             android:theme="@style/Theme.ObsidianAE" />
 
+        <!-- Plain (background) service: hosts the MCP endpoint and attaches the
+             floating bubble + control panel to the system window layer. It is
+             deliberately NOT a foreground service; the overlay window keeps the
+             process visible to the system while the bubble is shown. -->
         <service
             android:name=".mcp.McpService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:exported="false" />
     </application>
 
 </manifest>

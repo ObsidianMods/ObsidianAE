@@ -69,6 +69,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        // Bring the floating bubble up (needs the overlay permission; a no-op
+        // otherwise) even when the MCP endpoint itself is not running.
+        runCatching { (application as ObsidianApp).container.service.refreshOverlay() }
         lifecycleScope.launch {
             runCatching {
                 (application as ObsidianApp).container.service.resumeIfWanted()

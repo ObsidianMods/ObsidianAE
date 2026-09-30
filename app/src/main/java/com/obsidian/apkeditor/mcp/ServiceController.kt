@@ -2,8 +2,6 @@ package com.obsidian.apkeditor.mcp
 
 import android.content.Context
 import android.content.Intent
-import android.os.Build
-import androidx.core.content.ContextCompat
 import com.obsidian.apkeditor.mcp.overlay.AssistantOverlay
 import com.obsidian.apkeditor.mcp.overlay.OverlayPermission
 import com.obsidian.apkeditor.system.GrantRequests
@@ -13,7 +11,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,14 +51,11 @@ class ServiceController(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     /**
-     * Single-thread home for every overlay call. WindowManager views must be
-     * added/updated/removed on the thread that created them; the shared IO
-     * pool cannot guarantee that, so the overlay gets its own thread.
+     * Home for every overlay call: the MAIN thread. WindowManager.addView and
+     * AlertDialog need a Looper; the previous plain executor thread had none,
+     * so addView threw (swallowed by runCatching) and the bubble never showed.
      */
-    private val overlayScope = CoroutineScope(SupervisorJob() +
-        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-            Thread(r, "obsidian-overlay").apply { isDaemon = true }
-        }.asCoroutineDispatcher())
+    private val overlayScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var serverJob: Job? = null
     private val lock = Mutex()
 
@@ -70,23 +64,51 @@ class ServiceController(
     private val overlay = AssistantOverlay(app.applicationContext)
 
     private val overlayHost = object : AssistantOverlay.Host {
+        override val prefs: Prefs get() = this@ServiceController.prefs
+        override fun status(): ServerStatus = _status.value
         override fun isRunning(): Boolean = _status.value is ServerStatus.Running
         override fun endpointUrl(): String = _status.value.endpointUrl
         override fun hasPendingGrant(): Boolean = GrantRequests.pending.value != null
+        override fun tools(): List<com.obsidian.apkeditor.tools.ToolDefinition> =
+            runCatching { registryProvider?.invoke()?.all().orEmpty() }.getOrDefault(emptyList())
         override fun onToggleService() {
             scope.launch {
+                // Panel Stop only stops the endpoint: the bubble stays so the
+                // user can start it again from the same panel.
                 if (_status.value is ServerStatus.Running) {
-                    runCatching { stop() }
+                    runCatching { stop(exit = false) }
                 } else {
                     runCatching { start() }
                 }
                 refreshOverlay()
             }
         }
+        override fun onApplyConfig(port: Int, path: String) {
+            scope.launch { runCatching { applyConfig(port, path) } }
+        }
+        override fun onGatingChanged() {
+            runCatching {
+                registryProvider?.invoke()
+                    ?.syncDisabled(prefs.disabledTools(), prefs.disabledCapabilities())
+            }
+        }
+        override fun onHideBubble() {
+            prefs.showOverlay = false
+            refreshOverlay()
+            if (_status.value !is ServerStatus.Running) {
+                runCatching { appContext.stopService(Intent(appContext, McpService::class.java)) }
+            }
+        }
     }
+
 
     private val _status = MutableStateFlow<ServerStatus>(ServerStatus.Stopped)
     val statusFlow: StateFlow<ServerStatus> = _status.asStateFlow()
+
+    init {
+        // Any status transition repaints bubble dot + open control panel.
+        scope.launch { _status.collect { refreshOverlay() } }
+    }
 
     fun attachRegistry(provider: () -> ToolRegistry) {
         registryProvider = provider
@@ -148,9 +170,25 @@ class ServiceController(
         refreshOverlay()
     }
 
-    suspend fun stop() {
-        lock.withLock { stopLocked() }
+    /**
+     * [exit] = true tears everything down (server, bubble, service).
+     * false stops only the endpoint and keeps the bubble/service so the
+     * control panel can start it again.
+     */
+    suspend fun stop(exit: Boolean = true) {
+        lock.withLock { stopLocked(exit) }
     }
+
+    /** Persists a new port/path and restarts the endpoint if it was running. */
+    suspend fun applyConfig(port: Int, path: String) {
+        val wasRunning = _status.value is ServerStatus.Running
+        prefs.servicePort = port
+        prefs.endpointPath = path
+        if (wasRunning) start() else refreshOverlay()
+    }
+
+    /** True while the bubble should exist (wanted + permission granted). */
+    fun overlayWanted(): Boolean = prefs.showOverlay && OverlayPermission.granted(appContext)
 
     fun stopAsync() {
         scope.launch { stop() }
@@ -171,24 +209,28 @@ class ServiceController(
         server = null
     }
 
-    private fun stopLocked() {
+    private fun stopLocked(exit: Boolean) {
         serverJob?.cancel()
         serverJob = null
         stopServerLocked()
         prefs.serviceWanted = false
         _status.value = ServerStatus.Stopped
         McpNotifications.cancel(appContext)
-        overlayScope.launch {
-            runCatching { overlay.detach() }
+        if (exit || !overlayWanted()) {
+            overlayScope.launch { runCatching { overlay.detach() } }
+            runCatching { appContext.stopService(Intent(appContext, McpService::class.java)) }
+        } else {
+            refreshOverlay()
         }
-        runCatching { appContext.stopService(Intent(appContext, McpService::class.java)) }
     }
 
     fun isWanted(): Boolean = prefs.serviceWanted
 
     /** Called from McpService.onCreate: re-anchor overlay + notification. */
     fun onServiceCreated() {
-        McpNotifications.show(appContext, _status.value.endpointUrl)
+        if (_status.value is ServerStatus.Running) {
+            McpNotifications.show(appContext, _status.value.endpointUrl)
+        }
         refreshOverlay()
     }
 
@@ -205,8 +247,12 @@ class ServiceController(
      */
     fun refreshOverlay() {
         overlayScope.launch {
-            if (prefs.showOverlay && OverlayPermission.granted(appContext)) {
+            if (overlayWanted()) {
+                // The bubble lives in the service: make sure one exists so the
+                // window (and process) survive the app leaving the foreground.
+                if (!overlay.isShowing()) startService(appContext)
                 runCatching { overlay.attach(overlayHost) }
+                    .onFailure { android.util.Log.w("ObsidianOverlay", "attach failed", it) }
             } else {
                 runCatching { overlay.hideBubble() }
             }
@@ -216,10 +262,9 @@ class ServiceController(
 
     fun setOverlayVisible(visible: Boolean) {
         prefs.showOverlay = visible
-        if (visible && _status.value !is ServerStatus.Running) {
-            // Bubble without a server is pointless — start everything.
-            scope.launch { runCatching { start() } }
-            return
+        if (visible) {
+            // Make sure the service exists to host the window, then attach.
+            startService(appContext)
         }
         refreshOverlay()
     }
@@ -312,13 +357,15 @@ class ServiceController(
     }
 
     companion object {
+        /**
+         * Plain startService (background service). Allowed while the app is
+         * visible or the user just tapped a notification/bubble action; a
+         * refusal (BackgroundServiceStartNotAllowedException) is swallowed
+         * because the overlay window itself keeps the process alive.
+         */
         fun startService(context: Context) {
-            val intent = Intent(context, McpService::class.java)
-            if (Build.VERSION.SDK_INT >= 26) {
-                ContextCompat.startForegroundService(context, intent)
-            } else {
-                context.startService(intent)
-            }
+            runCatching { context.startService(Intent(context, McpService::class.java)) }
+                .onFailure { android.util.Log.w("ObsidianService", "startService refused", it) }
         }
     }
 }

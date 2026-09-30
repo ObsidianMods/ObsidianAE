@@ -2,48 +2,69 @@ package com.obsidian.apkeditor.mcp.overlay
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.graphics.PixelFormat
-import android.os.Build
+import android.util.Log
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.TextView
 import com.obsidian.apkeditor.R
-import com.obsidian.apkeditor.ui.main.MainActivity
+import com.obsidian.apkeditor.mcp.ServerStatus
+import com.obsidian.apkeditor.system.Prefs
+import com.obsidian.apkeditor.tools.ToolDefinition
 import kotlin.math.abs
 
 /**
- * Floating assistant overlay built on traditional Views (no Compose):
- * a draggable MCP-icon bubble with edge snap, tap toggles a menu panel
- * (service toggle, open app, hide). All views are released on [detach] —
- * nothing outlives the service.
+ * System-overlay assistant hosted by the (background) service.
+ *
+ * - A draggable bubble attached straight to the window manager
+ *   (TYPE_APPLICATION_OVERLAY) with edge snap.
+ * - Tapping it opens [OverlayControlPanel]: an AlertDialog that is also an
+ *   overlay window, with an MCP tab and a Capabilities tab.
+ *
+ * THREADING: every method here must run on the main thread. The controller
+ * guarantees that (Dispatchers.Main.immediate); WindowManager.addView and
+ * Dialog.show both require a Looper thread.
  */
 class AssistantOverlay(app: Context) {
 
     interface Host {
+        val prefs: Prefs
+        fun status(): ServerStatus
         fun isRunning(): Boolean
         fun endpointUrl(): String
         fun hasPendingGrant(): Boolean
+        fun tools(): List<ToolDefinition>
         fun onToggleService()
+        fun onApplyConfig(port: Int, path: String)
+        fun onGatingChanged()
+        fun onHideBubble()
     }
 
     private val appContext: Context = app.applicationContext
+
+    /** Themed context: AppCompat widgets + AlertDialog need an AppCompat theme. */
+    private val ui: Context = ContextThemeWrapper(appContext, R.style.Theme_ObsidianAE_Overlay)
+
     private val wm: WindowManager =
         appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
     private var bubble: View? = null
-    private var panel: View? = null
+    private var panel: OverlayControlPanel? = null
     private var host: Host? = null
 
     private val density: Float = appContext.resources.displayMetrics.density
-
     private fun dp(v: Int): Int = (v * density + 0.5f).toInt()
 
-    private val bubbleParams = baseParams(dp(60), dp(60)).apply {
+    private val bubbleParams = WindowManager.LayoutParams(
+        dp(60), dp(60),
+        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT,
+    ).apply {
         gravity = Gravity.TOP or Gravity.START
         x = 0
         y = dp(320)
@@ -51,104 +72,65 @@ class AssistantOverlay(app: Context) {
 
     fun attach(host: Host) {
         if (!OverlayPermission.granted(appContext)) return
+        this.host = host
         if (bubble != null) {
-            this.host = host
             refresh()
             return
         }
-        this.host = host
-        val view = LayoutInflater.from(appContext).inflate(R.layout.overlay_bubble, null)
+        val view = LayoutInflater.from(ui).inflate(R.layout.overlay_bubble, null)
         view.setOnTouchListener(DragListener())
-        view.findViewById<View>(R.id.bubble_icon).setOnClickListener { togglePanel() }
-        bubble = view
-        runCatching { wm.addView(view, bubbleParams) }
+        try {
+            wm.addView(view, bubbleParams)
+            bubble = view
+        } catch (t: Throwable) {
+            Log.w(TAG, "addView(bubble) failed", t)
+            bubble = null
+            return
+        }
         refresh()
     }
 
+    /** Removes the bubble and any open panel and forgets the host. */
     fun detach() {
+        hideBubble()
         host = null
-        panel?.let { runCatching { wm.removeView(it) } }
+    }
+
+    /** Hides bubble + panel; keeps the host so [attach] can bring it back. */
+    fun hideBubble() {
+        panel?.dismiss()
         panel = null
-        bubble?.let { runCatching { wm.removeView(it) } }
+        bubble?.let { runCatching { wm.removeViewImmediate(it) } }
         bubble = null
     }
 
     fun isShowing(): Boolean = bubble != null
 
-    /** Updates dot + panel contents to match the server state. */
+    /** Repaints the status dot and the open panel. */
     fun refresh() {
         val h = host ?: return
-        val running = runCatching { h.isRunning() }.getOrDefault(false)
         val pendingGrant = runCatching { h.hasPendingGrant() }.getOrDefault(false)
+        val status = runCatching { h.status() }.getOrDefault(ServerStatus.Stopped)
         bubble?.findViewById<View>(R.id.bubble_dot)?.setBackgroundResource(
             when {
                 pendingGrant -> R.drawable.overlay_dot_warn
-                running -> R.drawable.overlay_dot_on
+                status is ServerStatus.Running -> R.drawable.overlay_dot_on
                 else -> R.drawable.overlay_dot_off
             })
-        panel?.let {
-            it.findViewById<TextView>(R.id.panel_status).text =
-                when {
-                    pendingGrant -> "Storage grant needed"
-                    running -> "Running"
-                    else -> "Stopped"
-                }
-            it.findViewById<TextView>(R.id.panel_endpoint).text =
-                h.endpointUrl().ifEmpty { "—" }
-            it.findViewById<Button>(R.id.panel_toggle).text =
-                if (running) appContext.getString(R.string.stop_service)
-                else appContext.getString(R.string.start_service)
-        }
+        panel?.refresh()
     }
 
     private fun togglePanel() {
+        val h = host ?: return
         val existing = panel
-        if (existing != null) {
-            runCatching { wm.removeView(existing) }
+        if (existing != null && existing.isShowing()) {
+            existing.dismiss()
             panel = null
             return
         }
-        val h = host ?: return
-        val view = LayoutInflater.from(appContext).inflate(R.layout.overlay_panel, null)
-        view.findViewById<Button>(R.id.panel_toggle).setOnClickListener { h.onToggleService() }
-        view.findViewById<Button>(R.id.panel_open).setOnClickListener {
-            val launch = Intent(appContext, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            runCatching { appContext.startActivity(launch) }
-        }
-        view.findViewById<Button>(R.id.panel_hide).setOnClickListener { hideBubble() }
-        val params = baseParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = (bubbleParams.x + 130).coerceAtLeast(0)
-            y = bubbleParams.y
-        }
-        panel = view
-        runCatching { wm.addView(view, params) }
-        refresh()
-    }
-
-    /** Hides the bubble (and panel). Re-shown from notification or settings. */
-    fun hideBubble() {
-        panel?.let { runCatching { wm.removeView(it) } }
-        panel = null
-        bubble?.let { runCatching { wm.removeView(it) } }
-        bubble = null
-    }
-
-    private fun baseParams(w: Int, h: Int): WindowManager.LayoutParams {
-        val type = if (Build.VERSION.SDK_INT >= 26) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION")
-            WindowManager.LayoutParams.TYPE_PHONE
-        }
-        return WindowManager.LayoutParams(w, h, type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT)
+        val p = OverlayControlPanel(ui, h) { panel = null }
+        panel = p
+        if (!p.show()) panel = null
     }
 
     private inner class DragListener : View.OnTouchListener {
@@ -160,7 +142,7 @@ class AssistantOverlay(app: Context) {
 
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouch(v: View, event: MotionEvent): Boolean {
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = event.rawX
                     downY = event.rawY
@@ -172,7 +154,7 @@ class AssistantOverlay(app: Context) {
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - downX).toInt()
                     val dy = (event.rawY - downY).toInt()
-                    if (!moved && abs(dx) + abs(dy) < 12) return true
+                    if (!moved && abs(dx) + abs(dy) < dp(6)) return true
                     moved = true
                     bubbleParams.x = startX + dx
                     bubbleParams.y = startY + dy
@@ -180,23 +162,28 @@ class AssistantOverlay(app: Context) {
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (moved) {
-                        snapToEdge(v)
-                        return true
-                    }
-                    return false // let click through to icon/panel toggle
+                    if (moved) snapToEdge(v) else togglePanel()
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (moved) snapToEdge(v)
+                    return true
                 }
             }
             return false
         }
 
         private fun snapToEdge(v: View) {
-            val display = wm.defaultDisplay
-            val size = android.graphics.Point()
-            @Suppress("DEPRECATION")
-            display.getSize(size)
-            bubbleParams.x = if (bubbleParams.x + v.width / 2 < size.x / 2) 0 else size.x - v.width
+            val bounds = wm.currentWindowMetrics.bounds
+            val w = v.width.takeIf { it > 0 } ?: dp(60)
+            val h = v.height.takeIf { it > 0 } ?: dp(60)
+            bubbleParams.x = if (bubbleParams.x + w / 2 < bounds.width() / 2) 0 else bounds.width() - w
+            bubbleParams.y = bubbleParams.y.coerceIn(0, (bounds.height() - h).coerceAtLeast(0))
             runCatching { wm.updateViewLayout(v, bubbleParams) }
         }
+    }
+
+    private companion object {
+        const val TAG = "ObsidianOverlay"
     }
 }
