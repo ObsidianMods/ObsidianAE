@@ -91,11 +91,20 @@ class EditTools(
             try {
                 operations.update(op.id) { it.copy(status = OpStatus.RUNNING) }
                 val out = withContext(Dispatchers.IO) { workspaces.rebuild(ws, outName) }
+                // Post-align audit: rebuild aligns in place; assert it here so
+                // installability is proven on every build, not assumed.
+                val audit = withContext(Dispatchers.IO) {
+                    runCatching { com.obsidian.apkeditor.work.ZipAligner.verify(out) }.getOrNull()
+                }
                 sessions.close(p.need("sessionId"))
                 operations.update(op.id) {
                     it.copy(status = OpStatus.SUCCEEDED, progress = 1f, resultPath = out.path)
                 }
-                ok("operationId" to op.id, "status" to "SUCCEEDED", "output" to out.path)
+                ok("operationId" to op.id, "status" to "SUCCEEDED", "output" to out.path,
+                    "aligned_stored" to (audit?.stored?.toString() ?: "?"),
+                    "aligned_mis4" to (audit?.misaligned4?.toString() ?: "?"),
+                    "aligned_so" to (audit?.nativeLibs?.toString() ?: "?"),
+                    "aligned_so_miss" to (audit?.pageMiss?.toString() ?: "?"))
             } catch (e: Exception) {
                 operations.update(op.id) {
                     it.copy(status = OpStatus.FAILED, error = e.message.orEmpty().take(300))

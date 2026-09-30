@@ -50,7 +50,10 @@ class ZipWorkspaces(app: Context) : WorkspaceRepository {
     }
 
     override fun listEntries(ws: Workspace, prefix: String, offset: Int, limit: Int): EntryPage {
-        val safeLimit = limit.coerceIn(1, WorkLimits.PAGE_LIMIT)
+        // Store layer honors up to MAX_ENTRIES: paging to transport-sized
+        // slices is the TOOL layer's job (ae_apk_list/continue). Coercing
+        // here to PAGE_LIMIT hid every entry past #500 (live 899-entry APK).
+        val safeLimit = limit.coerceIn(1, WorkLimits.MAX_ENTRIES)
         val safeOffset = offset.coerceAtLeast(0)
         ZipFile(ws.original()).use { zip ->
             val all = zip.entries().asSequence()
